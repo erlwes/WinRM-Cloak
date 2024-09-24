@@ -267,6 +267,7 @@ try {
     $ServiceConfig += "shutdown_method=kill"
     $ServiceConfig | Out-File "$PSScriptRoot\WinRM-Cloak-Service.ini" -Force -Encoding ASCII -NoNewline -ErrorAction Stop
     Write-Log -Level 1 -Message "WinRM CLOAK - Created service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini')"
+    # If you edit the .ini file manually, make sure it is saved as ANSI after changes. The service will not start if UTF8.
 }
 catch {
     Write-Log -Level 3 -Message "WinRM CLOAK - Failed to create service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini'). Error: $($_.Exception.Message)"
