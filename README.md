@@ -9,7 +9,7 @@ Work in progress...
 
 **Installer**
 1. Check if session config already exist
-2. Handle SC CREATE if service already exist
+2. Handle SC CREATE if service already exist (Exitcode 1073)
 3. Offer to start service after create?
 4. Check if listener is active after starting?
 5. Could to an install path parameter. This way one could ensure that non-admins will not be able to access/modify service files (prevent service hijack or read of secret string)
