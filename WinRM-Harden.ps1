@@ -8,13 +8,12 @@
     1. Change the default port on the WinRM-service.
         - This will make the job harder for an attacker. Attackers will not always take time to scan all ports, especially not the dynamic/high ranges.        
 
-    2. Disable default session configurations
+    2. Disable default session configurations and create a custom session configuration
         - When default sc is disabled/not avaliable, the client will have to specify the correct configuration name when doing PS-remoting.
-
-    3. Create a custom session configuration
         - Unless an attacker finds correct config name in eventlog, transcripts, history, ps-readline or elsewhere, they would have to guess/bruteforce it.
-        - ! This session configuration in this scrips is not limited and has all capabilities !
-
+        - Created session configurations can be removed like so: 'Unregister-PSSessionConfiguration -Name MySessionConfig'
+        - ! This session configuration in this scrips is not limited and has all capabilities !        
+    
     Thoughts/general considerations
     1. When selecting a port. Avoid commons ports. One way of doing this would be to pick a port
        that is not on nmap top port list (nmap --top-ports 20000 localhost -v -oG -).
