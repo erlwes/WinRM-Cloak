@@ -5,16 +5,18 @@ Work in progress...
 ## TO-DO
 
 **General**
-1. Separate harden WinRM script and install WinRM-cloaker to separate scripts. The cloak is a bit niche, and some of the actions are separte. If not installing service, one woult not set winrm startup to manual etc.
+1. Separate harden WinRM script and install WinRM-cloaker to separate scripts. The cloak is a bit niche, and some of the actions are separte. If not installing service, one woult not set winrm startup to manual etc ✅
 
-**Installer**
-1. Check if session config already exist
-2. Handle SC CREATE if service already exist (Exitcode 1073)
-3. Offer to start service after create?
-4. Check if listener is active after starting?
-5. Could to an install path parameter. This way one could ensure that non-admins will not be able to access/modify service files (prevent service hijack or read of secret string)
-6. Could check that binary dependencies are store beside script, or in c:\windows, if not download and unzip? (srvstart.exe)
-7. Could use parameter sets instead of manual script logic for parameter combos
+**Harden** <- SEPARATED AND REWORKED
+1. Look into HTTPS setup with certificates. Offer to set up with selfsigned.
+
+**Installer** <- NEXT
+1. Handle SC CREATE if service already exist (Exitcode 1073)
+2. Offer to start service after create?
+3. Check if listener is active after starting?
+4. Could to an install path parameter. This way one could ensure that non-admins will not be able to access/modify service files (prevent service hijack or read of secret string)
+5. Could check that binary dependencies are store beside script, or in c:\windows, if not download and unzip? (srvstart.exe)
+6. Could use parameter sets instead of manual script logic for parameter combos
 
 **WinRM-Cloak service**
 1. Try to make sure that the service in not suspicable to script injection attacks
@@ -25,6 +27,7 @@ Work in progress...
 
 **Client**
 1. Create a client function that both de-cloaks AND connect using Enter-PSSession in one. Ideally loading the secret string from password manager. Hmmm still visible in transcripts? Dual edged blade. Test this.
+2. Check if workgroup and domain, and give tip about trustedhosts if WORKGROUP.
 
 
 ## Dependencies:
