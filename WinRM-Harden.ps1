@@ -16,12 +16,15 @@
     
     Thoughts/general considerations
     1. When selecting a port. Avoid commons ports. One way of doing this would be to pick a port
-       that is not on nmap top port list (nmap --top-ports 20000 localhost -v -oG -).
+       that is not on nmap top port list (nmap --top-ports 20000 localhost -v -oG -) OR choosing a high/dynamic port.
     2. The PowerShell session configuration created by this script is not limited (all capabilities).
     3. Consider limiting this session config by setting language mode, limiting capabilities with JEA and using a virtual account.
     4. In domain environments, try to use FQDN/hostname when PS-remoting. If you dont, NTLM will be used instead of kerberos. Authentication Negotiate = NTLM.
     5. Avvoid default/common username for administrative accounts, and enforce strong passwords
 #>
+
+#Requires -RunAsAdministrator
+
 Param (    
     [Parameter(Mandatory = $false)]
     [int]$WinRMPort,
@@ -159,14 +162,16 @@ if ($Listeners) {
         }
         Write-Log -Level 0 -Message "HTTP-port is $HTTPPort ($HTTPPortType)"
         if ($ComputerSystem.PartOfDomain -eq $false) {
-            Write-Log -Level 2 -Message "Kerberos-auth can not be used in a workgroup environment. WinRM should be HTTPS, if not, NTLM-auth will be sent in cleartext over the network!"
+            Write-Log -Level 2 -Message 'HTTP+WORKGROUP: Kerberos-auth can not be used in a workgroup environment!'            
+            Write-Log -Level 2 -Message 'HTTP+WORKGROUP: WinRM should be HTTPS, if not, NTLM-auth will be sent in cleartext over the network!'
         }
         else {
-            Write-Log -Level 2 -Message "Use hostname/FQDN when remoting to this server. When using IP, NTLM-auth is used, and sent in cleartext over the network!"
+            Write-Log -Level 2 -Message 'HTTP+DOMAIN: Use hostname/FQDN when remoting to this server!'
+            Write-Log -Level 2 -Message 'HTTP+DOMAIN: When using IP, NTLM-auth is used, and will be sent cleartext over network in combination with HTTP listener!'
         }
     }
     else {
-        Write-Log -Level 0 -Message "HTTP is not in use"
+        Write-Log -Level 0 -Message 'HTTP is not in use'
     }
 
     '';Write-Log -Level 4 -Message 'WINRM HTTPS LISTENER'
@@ -181,9 +186,10 @@ if ($Listeners) {
         Write-Log -Level 0 -Message "HTTPS-port is $HTTPPort ($HTTPSPortType)"    
     }
     else {
-        Write-Log -Level 0 -Message "HTTPS is not in use"
+        Write-Log -Level 0 -Message 'HTTPS is not in use'
         if ($ComputerSystem.PartOfDomain -eq $false) {
-            Write-Log -Level 2 -Message "HTTPS should be used, since this computer is in a WORKGROUP. Basic- and negotiate/NTLM authentication will be sent cleartext over the network when not using HTTPS!"
+            Write-Log -Level 2 -Message "WORKGROUP: HTTPS should be used, since this computer is in a WORKGROUP!"
+            Write-Log -Level 2 -Message "WORKGROUP: Basic- and negotiate/NTLM authentication will be sent cleartext over the network when using HTTP!"
         }
     }
 
@@ -230,13 +236,13 @@ if ($EnabledSessionConfigs) {
     Write-Log -Level 0 -Message "Enabled PSSessionConfigs: $($EnabledSessionConfigs.Count) ($(($EnabledSessionConfigs | Select-Object -ExpandProperty Name) -join ', '))"
 }
 else {
-    Write-Log -Level 0 -Message "Enabled PSSessionConfigs: 0"
+    Write-Log -Level 0 -Message 'Enabled PSSessionConfigs: 0'
 }
 if ($DisabledSessionConfigs) {
     Write-Log -Level 0 -Message "Disabled PSSessionConfigs: $($DisabledSessionConfigs.Count) ($(($DisabledSessionConfigs | Select-Object -ExpandProperty Name) -join ', '))"    
 }
 else {
-    Write-Log -Level 0 -Message "Disabled PSSessionConfigs: 0"
+    Write-Log -Level 0 -Message 'Disabled PSSessionConfigs: 0'
 }
 ''
 #Endregion Tests
@@ -309,6 +315,20 @@ else {
 
 # [WINRM - CHANGE DEFAULT PORT]
 if ($WinRMPort -ne $ListenerToConfigure.Port) {
+
+    if ($WinRMPort) {
+        Clear-Variable BusyTCPPorts -ErrorAction SilentlyContinue
+        $BusyTCPPorts = Get-NetTCPConnection | Select-Object -ExpandProperty LocalPort -Unique
+        if ($BusyTCPPorts -match "^$WinRMPort$") {
+            Write-Log -Level 2 -Message "Get-NetTCPConnection - TCP port $WinRMPort is in use. Process: '$((Get-NetTCPConnection -LocalPort 139 | ForEach-Object {Get-Process -Id $_.OwningProcess | Select-Object -ExpandProperty Name})[0])'"
+            Write-Log -Level 2 -Message 'Script aborted'
+            Break
+        }
+        else {
+            Write-Log -Level 0 -Message "Get-NetTCPConnection - TCP port $WinRMPort is avaliable"
+        }
+    }
+
     try {
         Set-WSManInstance -ResourceURI 'winrm/config/Listener' -SelectorSet @{Address=$ListenerToConfigure.Address;Transport=$ListenerToConfigure.Transport} -ValueSet @{Port="$WinRMPort"} -ErrorAction Stop | Out-Null
         Write-Log -Level 1 -Message "Set-WSManInstance - $($ListenerToConfigure.Transport)-port for WinRM changed to '$WinRMPort'"
@@ -396,3 +416,4 @@ else {
     Write-Log -Level 0 -Message "Get-NetFirewallRule - Default firewall rules for WinRM $($ListenerToConfigure.Transport) is already disabled or deleted"
 }
 #Endregion Firewall
+''
