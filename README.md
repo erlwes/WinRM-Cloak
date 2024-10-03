@@ -1,34 +1,36 @@
 # WinRM-Cloak
 
-Work in progress...
+Notes for testing:
+```PowerShell
+.\WinRM-Harden.ps1 -WinRMPort 10000 -PSSessionConfName MySessionConfig -Harden
+.\WinRM-Cloak.ps1 -CloakPort 3000
+Start-Service WinRM-Cloak
+$Creds = (Get-Credential -Credential "$(Hostname)\Temp")
+.\WinRM-DecloakAndConnect.ps1 -CloakPort 3000 -WinRMPort 10000 -SecretString 'Knock knock! Secret sauce' -Computer Localhost -PSSessionConfName MySessionConfig -Creds $Creds
+# $PSSessionOption
+```
 
-## TO-DO
+**Dependencies**
+[srvstart](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip): srvstart.exe, srvstart.dll and logger.dll from this [zip](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip).
 
-**General**
-1. Separate harden WinRM script and install WinRM-cloaker to separate scripts. The cloak is a bit niche, and some of the actions are separte. If not installing service, one woult not set winrm startup to manual etc ✅
+# To-do
+**WinRM-Harden (hardening script)**
+1. Look into HTTPS setup with certificates. Offer to set up with selfsigned. Important in workgroups/non-domain environment
 
-**Harden** <- SEPARATED AND REWORKED
-1. Look into HTTPS setup with certificates. Offer to set up with selfsigned.
-
-**Installer** <- NEXT
-1. Handle SC CREATE if service already exist (Exitcode 1073)
-2. Offer to start service after create?
-3. Check if listener is active after starting?
-4. Could to an install path parameter. This way one could ensure that non-admins will not be able to access/modify service files (prevent service hijack or read of secret string)
-5. Could check that binary dependencies are store beside script, or in c:\windows, if not download and unzip? (srvstart.exe)
+**WinRM-Cloak (service installer)** <- NEXT
+1. Attempt to start service if successfully created
+3. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
+4. Make optional parameter so specify service install folder (some comments on folder ACL?)
+5. Check dependencies (check that binary dependencies are store beside script, or in c:\windows, if not download and unzip?)
 6. Could use parameter sets instead of manual script logic for parameter combos
+7. Need to parameterise the secret string on service install
 
-**WinRM-Cloak service**
+**WinRM-Cloak-Service (UDP listener/service)**
 1. Try to make sure that the service in not suspicable to script injection attacks
 2. Check if performance of listening loop can be improved
-3. Could add logging to disk for successfull "unlocks", and start, stop service etc. Or log all connecting IPs, but only correct strings?
-4. Parameterize open-for-duration (10m/600s for now)
-5. Parameterize secret string. Check if non-admins can read service start parameters? yes? no? A bit too late if already on server, so might not be a big deal.
+3. Parameterize open-for-duration (10m/600s for now)
+4. Parameterize secret string. Check if non-admins can read service start parameters? yes? no? A bit too late if already on server, so might not be a big deal.
 
-**Client**
-1. Create a client function that both de-cloaks AND connect using Enter-PSSession in one. Ideally loading the secret string from password manager. Hmmm still visible in transcripts? Dual edged blade. Test this.
-2. Check if workgroup and domain, and give tip about trustedhosts if WORKGROUP.
+**WinRM-DecloakAndConnect (client/connect)**
+Needs more work, but seems to work ok for now..
 
-
-## Dependencies:
-[srvstart](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip): srvstart.exe, srvstart.dll and logger.dll from this [zip](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip).
