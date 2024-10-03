@@ -30,6 +30,7 @@ $Creds = (Get-Credential -Credential "$(Hostname)\Temp")
 2. Check if performance of listening loop can be improved
 3. Parameterize open-for-duration (10m/600s for now)
 4. Parameterize secret string. Check if non-admins can read service start parameters? yes? no? A bit too late if already on server, so might not be a big deal.
+5. Add noninteractice parameter to powershell.exe in service?
 
 **WinRM-DecloakAndConnect (client/connect)**
 Needs more work, but seems to work ok for now..
