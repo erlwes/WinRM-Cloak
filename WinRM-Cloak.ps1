@@ -63,6 +63,19 @@ Function Write-Log {
         $LogErrors += $Message
     }
 }
+function New-Base32SecretKey {
+    param (
+        [int]$length = 32
+    )    
+    $base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"    
+    $seedKey = ""   
+    for ($i = 0; $i -lt $length; $i++) {        
+        $randomIndex = Get-Random -Minimum 0 -Maximum $base32Alphabet.Length
+        $randomChar = $base32Alphabet[$randomIndex]
+        $seedKey += $randomChar
+    }
+    return $seedKey
+}
 
 switch ($PSCmdlet.ParameterSetName) {
     'Remove'  {        
@@ -75,20 +88,33 @@ switch ($PSCmdlet.ParameterSetName) {
             }
             catch {
                 Write-Log -Level 3 -Message "Stop-Service - Failed to stop service 'WinRM-Cloak'. Error: $($_.Exception.Message)"
+                Break
             }
             
-            SC.EXE DELETE WinRM-Cloak
+            SC.EXE DELETE WinRM-Cloak | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log -Level 1 -Message "WinRM CLOAK - Service deleted (Exitcode: $LASTEXITCODE)"
             }
             else {
                 Write-Log -Level 3 -Message "WinRM CLOAK - Failed to delete service (Exitcode: $LASTEXITCODE)"
-            }              
-            Break
+                Break
+            }
         }
         else {
             Write-Log -Level 2 -Message "Get-Service - Service 'WinRM-Cloak' does not exist and can therefore not be removed."
-            Break
+        }        
+        try {
+            Get-EventLog -LogName WinRM-Cloak -ErrorAction Stop
+            try {
+                Remove-EventLog -LogName 'WinRM-Cloak' -ErrorAction Stop
+                Write-Log -Level 1 -Message "Remove-EventLog - Eventlog deleted"
+            }
+            catch {
+                Write-Log -Level 3 -Message "Remove-EventLog - Failed to delete eventlog. Error: $($_.Exception.Message)"
+            }
+        }
+        catch {
+            Write-Log -Level 2 -Message "Get-EventLog - Eventlog 'WinRM-Cloak' does not exist and can therefore not be removed."
         }
     }
     'Monitor' {
@@ -97,7 +123,7 @@ switch ($PSCmdlet.ParameterSetName) {
                 Clear-Host
                 Clear-Variable Port -ErrorAction SilentlyContinue    
                 $Port = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener\*+HTTP\').Port
-                '';Write-Host "[MONITORING]" -ForegroundColor Cyan
+                '';Write-Host "[SERVICES]" -ForegroundColor Cyan
                 if((Get-Service WinRM).Status -eq 'Stopped') {
                     Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
                     Write-Host "WinRM is stopped (TCP $Port)" -ForegroundColor Yellow
@@ -130,12 +156,19 @@ switch ($PSCmdlet.ParameterSetName) {
                     Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
                     Write-Host "WinRM-Cloak is running (UDP $($UDPEndpoint.LocalPort))" -ForegroundColor Green
                 }
+
+                '';Write-Host "[LAST 10 EVENTS]" -ForegroundColor Cyan
+                Get-EventLog -LogName WinRM-Cloak -Newest 10
                 Start-Sleep -s 2
             }
         }
         Invoke-WinRMMonitor;Break
     }
     'Install' {
+        #Region EventViewer
+        New-EventLog -Source 'WinRM-Cloak' -LogName 'WinRM-Cloak'
+        #Endregion EventViewer
+
         #Region WinRM
         Write-Host "[INSTALLING SERVICE]" -ForegroundColor Cyan
         # [WINRM - SET SERVICE STARTUP TO MANUAL]
@@ -150,6 +183,27 @@ switch ($PSCmdlet.ParameterSetName) {
         }
         catch {
             Write-Log -Level 3 -Message "WINRM - Failed to set service startuptype to 'Manual'. Error: $($_.Exception.Message)"
+        }
+
+        # [WINRM - START SERVICE]
+        try {
+            if ((Get-Service WinRM).Status -ne 'Running') {
+                Start-Service WinRM -ErrorAction Stop
+                Write-Log -Level 1 -Message 'WINRM - Service started'
+            }
+        }
+        catch {
+            Write-Log -Level 3 -Message "WINRM - Failed to start service. Error: $($_.Exception.Message)"
+            Break
+        }
+
+        # [WINRM - GET LISTENER]
+        try {
+            $Listeners = Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate
+            Write-Log -Level 1 -Message "WINRM - Got listener (Transport: $($Listeners.Transport))"
+        }
+        catch {
+            Write-Log -Level 3 -Message "WINRM - Failed to get listener. Error: $($_.Exception.Message)"
         }
 
         # [WINRM - STOP SERVICE]
@@ -185,16 +239,21 @@ switch ($PSCmdlet.ParameterSetName) {
         }
         #Endregion Firewall
 
-
         #Region Cloak service
         # [WinRM-Cloak - CREATE SERVICE FOR UDP LISTENER]
         if (Test-Path -Path "$PSScriptRoot\WinRM-Cloak-Service.ini") {
             Remove-Item "$PSScriptRoot\WinRM-Cloak-Service.ini" -Force -Confirm:$false
         }
+
+        # [WinRM-Cloak - Generate TOTP secret key/seed key]
+        $TOTPSecretKey = New-Base32SecretKey
+        Write-Log -Level 2 -Message "WinRM CLOAK - Secret key/seed key generated: '$TOTPSecretKey'. This is needed to generate TOTP on client-side"
+
+        # [WinRM-Cloak - Generate service .ini-file]
         try {
             $ServiceConfig = @()
             $ServiceConfig += "[WinRM-Cloak]`n"
-            $ServiceConfig += "startup=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Unrestricted -NoProfile -File $PSScriptRoot\WinRM-Cloak-Service.ps1 $CloakPort`n"
+            $ServiceConfig += "startup=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Unrestricted -NoProfile -File $PSScriptRoot\WinRM-Cloak-Service.ps1 $CloakPort $TOTPSecretKey $($Listeners.Transport)`n"
             $ServiceConfig += "shutdown_method=kill"
             $ServiceConfig | Out-File "$PSScriptRoot\WinRM-Cloak-Service.ini" -Force -Encoding ASCII -NoNewline -ErrorAction Stop
             Write-Log -Level 1 -Message "WinRM CLOAK - Created service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini')"
@@ -204,7 +263,7 @@ switch ($PSCmdlet.ParameterSetName) {
             Write-Log -Level 3 -Message "WinRM CLOAK - Failed to create service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini'). Error: $($_.Exception.Message)"
         }
 
-
+        # [WinRM-Cloak - Create the service]
         SC.EXE CREATE WinRM-Cloak Displayname= "WinRM-Cloak" binpath= "$PSScriptRoot\srvstart.exe WinRM-Cloak -c $PSScriptRoot\WinRM-Cloak-Service.ini" start=auto | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-Log -Level 1 -Message "WinRM CLOAK - Service created (Exitcode: $LASTEXITCODE)"
@@ -217,6 +276,18 @@ switch ($PSCmdlet.ParameterSetName) {
         }
         else {
             Write-Log -Level 3 -Message "WinRM CLOAK - Failed to create service (Exitcode: $LASTEXITCODE)"
+        }
+
+        # [WinRM-Cloak - Start the service]
+        try {
+            if ((Get-Service WinRM-Cloak).Status -ne 'Running') {
+                Start-Service WinRM-Cloak -ErrorAction Stop
+                Write-Log -Level 1 -Message 'WinRM CLOAK - Service started'
+            }
+        }
+        catch {
+            Write-Log -Level 3 -Message "WinRM CLOAK - Failed to start service. Error: $($_.Exception.Message)"
+            Break
         }
         #Endregion Cloak service
     }
