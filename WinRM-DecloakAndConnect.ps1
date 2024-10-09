@@ -5,8 +5,11 @@ Param (
     [Parameter(Mandatory = $true)]
     [int]$WinRMPort,
 
-    [Parameter(Mandatory = $true)]
-    [string]$SecretString,
+    [Parameter(Mandatory = $false)]
+    [string]$TOTP, #If TOTP is read directly from authenticator. No worries if this is logged to disk.
+
+    [Parameter(Mandatory = $false)]
+    [string]$TOTPSecretKey, #If OTP needs to be calulated from seed key/secret key. For testing. This key needs to be 16,32 or 64 characters long and consit of uppercase A-Z and digits 2-7 (Base32).
 
     [Parameter(Mandatory = $false)]
     [string]$Computer = 'localhost',
@@ -64,18 +67,18 @@ Function Test-TCPPort {
     $tcpClient = New-Object System.Net.Sockets.TcpClient    
     try {
         $tcpClient.BeginConnect($Computer, $Port, $null, $null) | Out-Null
-        $wait = $tcpClient.Client.Poll(2000000, [System.Net.Sockets.SelectMode]::SelectWrite)        
+        $wait = $tcpClient.Client.Poll(2000000, [System.Net.Sockets.SelectMode]::SelectWrite)
         if ($wait) {
-            Write-Log -Level 1 -Message "Test-TCPPort - '$WinRMPort' is open on computer '$Computer' (DE-CLOAKED)"
+            Write-Log -Level 1 -Message "Test-TCPPort - '$Port' is open on computer '$Computer' (DE-CLOAKED)"
             $Script:Decloaked = $true
             
         } else {
-            Write-Log -Level 0 -Message "Test-TCPPort - '$WinRMPort' is closed/filtered on computer '$Computer' (CLOAKED)"
+            Write-Log -Level 0 -Message "Test-TCPPort - '$Port' is closed/filtered on computer '$Computer' (CLOAKED)"
             $Script:Decloaked = $false
         }
     } 
     catch {
-        Write-Log -Level 3 -Message "Test-TCPPort - Unable to connet to '$WinRMPort' on computer '$Computer'. Error: $_"
+        Write-Log -Level 3 -Message "Test-TCPPort - Unable to connet to '$Port' on computer '$Computer'. Error: $_"
         $Script:Decloaked = $false     
     }
     finally {     
@@ -108,7 +111,58 @@ Function Send-UDPPacket {
 
     # Send the buffer 
     $Sent   = $Sock.Send($Buffer)
-    Write-Log -Level 1 -Message "Send-UDPPacket - Secret string sendt to '$Computer' on UDP '$Port' ($Sent chars)"    
+    Write-Log -Level 1 -Message "Send-UDPPacket - Secret key sent to '$Computer' on UDP '$Port' ($Sent chars)"    
+}
+function Convert-Base32ToBytes {
+    param ([string]$base32)
+    $base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    $bytes = @()
+    $base32 = $base32.ToUpper().Replace("=", "")
+    $bitBuffer = 0
+    $bitBufferLength = 0
+
+    foreach ($char in $base32.ToCharArray()) {
+        $bitBuffer = ($bitBuffer -shl 5) -bor ($base32Alphabet.IndexOf($char))
+        $bitBufferLength += 5
+
+        while ($bitBufferLength -ge 8) {
+            $bitBufferLength -= 8
+            $bytes += [byte](($bitBuffer -shr $bitBufferLength) -band 0xFF)
+        }
+    }
+
+    return ,$bytes
+}
+function Get-OTP {
+    param (
+        [string]$secret,
+        [int]$digits = 6, # 12 digits is ~4h cracktime, but will be throttled by 4 sec each try by service
+        [int]$interval = 30  # 30 sec
+    )
+
+    # Convert secret to byte array
+    $keyBytes = Convert-Base32ToBytes -base32 $secret
+
+    # Calculate current time step (in days)
+    $unixTimestamp = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+    $timeStep = [BitConverter]::GetBytes([System.Net.IPAddress]::HostToNetworkOrder([int64]($unixTimestamp / $interval)))
+
+    # Generate HMAC-SHA1 hash
+    $hmac = New-Object System.Security.Cryptography.HMACSHA1
+    $hmac.Key = $keyBytes
+    $hash = $hmac.ComputeHash($timeStep)
+
+    # Use the last nibble to choose the offset
+    $offset = $hash[$hash.Length - 1] -band 0x0F
+    $otpBinary =
+        (($hash[$offset] -band 0x7F) -shl 24) -bor
+        (($hash[$offset + 1] -band 0xFF) -shl 16) -bor
+        (($hash[$offset + 2] -band 0xFF) -shl 8) -bor
+        ($hash[$offset + 3] -band 0xFF)
+
+    # Generate OTP based on specified digit length
+    $otp = $otpBinary % [math]::Pow(10, $digits)
+    return $otp.ToString().PadLeft($digits, '0')
 }
 #Endregion Functions
 
@@ -125,9 +179,20 @@ if (!$Creds -and $ComputerSystem.PartOfDomain -eq $false) {
 }
 
 if ((Test-TCPPort -Computer $Computer -Port $WinRMPort) -eq $true) { }
-else {    
-    Send-UDPPacket -Port $CloakPort -Computer $Computer -Message $SecretString
-    Start-Sleep -Seconds 2
+else {
+    if (!$TOTP) {
+        $TOTP = (Read-Host -Prompt 'Please enter OTP to de-cloak target')
+    }
+    elseif ($TOTPSecreyKey) {
+        $TOTP = Get-OTP -secret $TOTPSecreyKey
+    }
+    else {
+        Write-Log -Level 2 -Message "Target cloaked, and no TOTP or secret key is provided. Not able to continue."
+        Break
+    }
+    Send-UDPPacket -Port $CloakPort -Computer $Computer -Message $TOTP
+    Write-Log -Level 2 -Message "Waiting 5 sec to allow target to start WinRM-service."
+    Start-Sleep -Seconds 5
     Test-TCPPort -Computer $Computer -Port $WinRMPort    
 }
 
