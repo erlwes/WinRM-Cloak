@@ -35,7 +35,7 @@ $Parameters = @{
 
 # To-do
 **WinRM-Harden (hardening script)**
-1. Look into HTTPS setup with certificates. Offer to set up with selfsigned. Important in workgroups/non-domain environment
+1. Look into HTTPS setup with certificates. Offer to set up with selfsigned. Important in workgroups/non-domain environment ❗
 
 **WinRM-Cloak (service installer)**
 1. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
@@ -45,7 +45,7 @@ $Parameters = @{
 
 
 **WinRM-Cloak-Service (UDP listener/service)**
-1. Implement actions on service crash, stop or OS-shutdown!
+1. Implement actions on service crash, stop or OS-shutdown! ⚠️
 
 **WinRM-DecloakAndConnect (client/connect)**
 1. ...
