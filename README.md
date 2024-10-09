@@ -2,12 +2,32 @@
 
 Notes for testing:
 ```PowerShell
-.\WinRM-Harden.ps1 -WinRMPort 10000 -PSSessionConfName MySessionConfig -Harden
-.\WinRM-Cloak.ps1 -CloakPort 3000
-Start-Service WinRM-Cloak
-$Creds = (Get-Credential -Credential "$(Hostname)\Temp")
-.\WinRM-DecloakAndConnect.ps1 -CloakPort 3000 -WinRMPort 10000 -SecretString 'Knock knock! Secret sauce' -Computer Localhost -PSSessionConfName MySessionConfig -Creds $Creds
-# $PSSessionOption
+# SERVER - Harden WinRM and install Cloak-service
+$WinRMPort = 3000
+$CloakPort = 10000
+$PSSessionConfigName = 'MySessionConfig'
+$Computer = '10.90.90.31'
+$Creds = (Get-Credential 'WinDev2407Eval\Test')
+
+.\WinRM-Harden.ps1 -WinRMPort 3000 -PSSessionConfName $PSSessionConfigName -Harden
+.\WinRM-Cloak.ps1 -CloakPort 10000 #Take note of secret key/seed key for TOTP from console, or get from "WinRM-Cloak-Service.ini" after install.
+
+# CLIENT - De-cloak and connect
+$WinRMPort = 3000
+$CloakPort = 10000
+$PSSessionConfigName = 'MySessionConfig'
+$Computer = '10.10.10.100'
+$Creds = (Get-Credential 'WinDev2407Eval\Test')
+
+$Parameters = @{
+    CloakPort = $CloakPort
+    WinRMPort = $WinRMPort
+    Computer = $Computer
+    Creds = $Creds
+    PSSessionConfName = $PSSessionConfigName
+}
+
+.\WinRM-DecloakAndConnect.ps1 @Parameters #Make sure the seed key is entered into an autenticator, so that you have your OTP ready (or send the key itself using TOTPSecreyKey-parameter)
 ```
 
 **Dependencies**
@@ -18,20 +38,15 @@ $Creds = (Get-Credential -Credential "$(Hostname)\Temp")
 1. Look into HTTPS setup with certificates. Offer to set up with selfsigned. Important in workgroups/non-domain environment
 
 **WinRM-Cloak (service installer)**
-1. Attempt to start service if successfully created
-3. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
-4. Make optional parameter so specify service install folder (some comments on folder ACL?)
-5. Check dependencies (check that binary dependencies are store beside script, or in c:\windows, if not download and unzip?)
-6. Could use parameter sets instead of manual script logic for parameter combos
-7. Need to parameterise the secret string on service install
+1. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
+2. Make optional parameter so specify service install folder (some comments on folder ACL?)
+3. Check dependencies (check that binary dependencies are store beside script, or in c:\windows, if not download and unzip?)
+4. Could use parameter sets instead of manual script logic for parameter combos
+
 
 **WinRM-Cloak-Service (UDP listener/service)**
-1. Try to make sure that the service in not suspicable to script injection attacks
-2. Check if performance of listening loop can be improved
-3. Parameterize open-for-duration (10m/600s for now)
-4. Parameterize secret string. Check if non-admins can read service start parameters? yes? no? A bit too late if already on server, so might not be a big deal.
-5. Add noninteractice parameter to powershell.exe in service?
+1. Implement actions on service crash, stop or OS-shutdown!
 
 **WinRM-DecloakAndConnect (client/connect)**
-Needs more work, but seems to work ok for now..
+1. ...
 
