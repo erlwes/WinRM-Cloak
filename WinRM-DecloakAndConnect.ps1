@@ -183,8 +183,8 @@ else {
     if (!$TOTP) {
         $TOTP = (Read-Host -Prompt 'Please enter OTP to de-cloak target')
     }
-    elseif ($TOTPSecreyKey) {
-        $TOTP = Get-OTP -secret $TOTPSecreyKey
+    elseif ($TOTPSecretKey) {
+        $TOTP = Get-OTP -secret $TOTPSecretKey
     }
     else {
         Write-Log -Level 2 -Message "Target cloaked, and no TOTP or secret key is provided. Not able to continue."
