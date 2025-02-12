@@ -1,7 +1,8 @@
 # WinRM-Cloak
 Hardening and cloaking of remote access via. PowerShell-remoting.
 
-Download and view this video-demo of the setup:
+## Video demo
+
 https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 
 
