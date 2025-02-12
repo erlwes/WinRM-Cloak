@@ -1,5 +1,5 @@
 # WinRM-Cloak
-Hardening and cloaking of remote access via. PowerShell-remoting.
+Hardening and cloaking of PowerShell-remoting. In short making the WinRM-service avoid detection of nmap/port-scans, add 2FA portection using OTP and a few other security by obsucity changes to the service.
 
 ## Video demo
 
