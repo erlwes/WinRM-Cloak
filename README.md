@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 4. A listener on UDP port 10000 is waiting for the correct TOTP code, if received, then starts WinRM-service for 10 minutes
 
 ### The attacker would have to
-1. Figure out that a listener is active on UDP 10.000 (nmap detects nothing. No resposebuffer on listener/no reply is returned)
+1. Figure out that a listener is active on UDP 10000 (nmap will not detect. No resposebuffer on listener/no reply is returned)
 2. Figure out the correct seed/key in order to generate the correct OTP that is accepted by the listener, wich in turn opens WinRM on TCP 3000 (non-default port)
 3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can ennumerate the session configs remote?
 4. Have a username and a passord for the remote server, and connect to it
