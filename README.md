@@ -22,8 +22,12 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 1. JIT for the session-config
 2. Use of WinRM over HTTPS or SSH (now possible)
 
+### Combine with
+1. Strict firewall rules, so that other remoting and attack vectors are unavaliable (eg. RDP, SMB etc.)
+2. Logging of attempts vs. default WinRM-ports
+3. Non-default username for pivileged accounts with remoting enabled (eg. not username "Administrator" or "Admin")
 
-Notes for testing:
+### Example setup and testing
 ```PowerShell
 # SERVER - Harden WinRM and install Cloak-service
 $WinRMPort = 3000
@@ -50,7 +54,7 @@ $Parameters = @{
 .\WinRM-DecloakAndConnect.ps1 @Parameters #Make sure the seed key is entered into an authenticator, so that you have your OTP ready (or send the key itself using TOTPSecreyKey-parameter)
 ```
 
-**Dependencies**
+### Dependencies
 [srvstart](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip): srvstart.exe, srvstart.dll and logger.dll from this [zip](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip).
 
 ### Ideas
