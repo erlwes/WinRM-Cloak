@@ -6,7 +6,6 @@ Hardening and cloaking of remote access via. PowerShell-remoting.
 https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 
 
-
 ### This is the idea:
 1. The default port on WinRM-server is changed, so that it is no longer listening on 5985/5986
 2. The default PSSession configurations are removed, so that one will have to specify correct name for exising session config in order to connect
@@ -54,9 +53,9 @@ $Parameters = @{
 **Dependencies**
 [srvstart](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip): srvstart.exe, srvstart.dll and logger.dll from this [zip](https://github.com/rozanski/srvstart/blob/master/srvstart/srvstart_run.v110.zip).
 
-# To-do
+### Ideas
 **WinRM-Harden (hardening script)**
-1. Look into HTTPS setup with certificates. Offer to set up with selfsigned. Important in workgroups/non-domain environment ❗
+1. Change to WinRM over HTTPS. Offer to set up with selfsigned. Important in workgroups/non-domain environment to avoid NTLM❗
 
 **WinRM-Cloak (service installer)**
 1. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
@@ -64,6 +63,7 @@ $Parameters = @{
 3. Check dependencies (check that binary dependencies are store beside script, or in c:\windows, if not download and unzip?)
 4. Could use parameter sets instead of manual script logic for parameter combos
 
-
 **WinRM-Cloak-Service (UDP listener/service)**
 1. Implement actions on service crash, stop or OS-shutdown! ⚠️
+2. Consider converting to NSSM for service creation?
+3. Instead of using static TCP-port on WinRM-service, the port could be mutating/changed before each start. Something known to both client and server, for example 3000 + current day of month, or something else known to both server and client
