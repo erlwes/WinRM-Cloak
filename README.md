@@ -1,4 +1,24 @@
 # WinRM-Cloak
+Hardening and cloaking of remote access via. PowerShell-remoting.
+
+Download and view this video-demo of the setup: https://github.com/erlwes/WinRM-Cloak/blob/main/DEMO.mkv
+
+### This is the idea:
+1. The default port on WinRM-server is changed, so that it is no longer listening on 5985/5986
+2. The default PSSession configurations are removed, so that one will have to specify correct name for exising session config in order to connect
+3. The WinRM service is not running by default
+4. A listener on UDP port 10000 is waiting for the correct TOTP code, if received, then starts WinRM-service for 10 minutes. This listener gives 0 response, and nmap will not detect it.
+
+### The attacker would have to
+1. Figure out that a listener is active on UDP 10.000 (nmap detects nothing. No resposebuffer on listener, and no reply is sendt back)
+2. Figure out the correct seed-string in order to generate the correct OTP that is accepted by the listener, wich in turn opens WinRM on TCP 3000.
+3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can ennumerate the session configs remote?
+4. Have a username and a passord for the remote server, and connect to it
+
+### The POC does not cover
+1. JIT for the session-config
+2. Use of WinRM over HTTPS or SSH (now possible)
+
 
 Notes for testing:
 ```PowerShell
@@ -6,11 +26,8 @@ Notes for testing:
 $WinRMPort = 3000
 $CloakPort = 10000
 $PSSessionConfigName = 'MySessionConfig'
-$Computer = '10.90.90.31'
-$Creds = (Get-Credential 'WinDev2407Eval\Test')
-
-.\WinRM-Harden.ps1 -WinRMPort 3000 -PSSessionConfName $PSSessionConfigName -Harden
-.\WinRM-Cloak.ps1 -CloakPort 10000 #Take note of secret key/seed key for TOTP from console, or get from "WinRM-Cloak-Service.ini" after install.
+.\WinRM-Harden.ps1 -WinRMPort $WinRMPort -PSSessionConfName $PSSessionConfigName -Harden
+.\WinRM-Cloak.ps1 -CloakPort $CloakPort #Take note of secret key/seed key for TOTP from console, or get from "WinRM-Cloak-Service.ini" after install.
 
 # CLIENT - De-cloak and connect
 $WinRMPort = 3000
@@ -46,7 +63,3 @@ $Parameters = @{
 
 **WinRM-Cloak-Service (UDP listener/service)**
 1. Implement actions on service crash, stop or OS-shutdown! ⚠️
-
-**WinRM-DecloakAndConnect (client/connect)**
-1. ...
-
