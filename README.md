@@ -1,5 +1,5 @@
 # WinRM-Cloak
-Hardening and cloaking of PowerShell-remoting. In short making the WinRM-service avoid detection of nmap/port-scans, add 2FA protection using OTP and a few other security by obsucity changes to the service.
+Hardening and cloaking of PowerShell-remoting. In short making the WinRM-service avoid detection of nmap/port-scans, add 2FA protection using OTP and a few other security by obscurity changes to the service.
 
 ## Video demo
 
@@ -8,15 +8,15 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 
 ### This is the idea:
 1. The default port on WinRM-server is changed, so that it is no longer listening on 5985/5986
-2. The default PSSession configurations are removed, so that one will have to specify correct name for exising session config in order to connect
+2. The default PSSession configurations are removed, so that one will have to specify correct name for existing session config in order to connect
 3. The WinRM service is not running by default
 4. A listener on UDP port 10000 is waiting for the correct TOTP code, if received, then starts WinRM-service for 10 minutes
 
 ### The attacker would have to
 1. Figure out that a listener is active on UDP 10000 (nmap will not detect. No resposebuffer on listener/no reply is returned)
-2. Figure out the correct seed/key in order to generate the correct OTP that is accepted by the listener, wich in turn opens WinRM on TCP 3000 (non-default port)
-3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can ennumerate the session configs remote?
-4. Have a username and a passord for the remote server, and connect to it
+2. Figure out the correct seed/key in order to generate the correct OTP that is accepted by the listener, which in turn opens WinRM on TCP 3000 (non-default port)
+3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can enumerate the session configs remote?
+4. Have a username and a password for the remote server, and connect to it
 
 ### The POC does not cover
 1. JIT for the session-config
@@ -47,7 +47,7 @@ $Parameters = @{
     PSSessionConfName = $PSSessionConfigName
 }
 
-.\WinRM-DecloakAndConnect.ps1 @Parameters #Make sure the seed key is entered into an autenticator, so that you have your OTP ready (or send the key itself using TOTPSecreyKey-parameter)
+.\WinRM-DecloakAndConnect.ps1 @Parameters #Make sure the seed key is entered into an authenticator, so that you have your OTP ready (or send the key itself using TOTPSecreyKey-parameter)
 ```
 
 **Dependencies**
@@ -55,7 +55,7 @@ $Parameters = @{
 
 ### Ideas
 **WinRM-Harden (hardening script)**
-1. Change to WinRM over HTTPS. Offer to set up with selfsigned. Important in workgroups/non-domain environment to avoid NTLM❗
+1. Change to WinRM over HTTPS. Offer to set up with self signed. Important in workgroups/non-domain environment to avoid NTLM❗
 
 **WinRM-Cloak (service installer)**
 1. Verify that it is listening to expected port after starting (method is already in place inside monitor function)
