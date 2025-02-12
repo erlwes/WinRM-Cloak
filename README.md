@@ -1,7 +1,10 @@
 # WinRM-Cloak
 Hardening and cloaking of remote access via. PowerShell-remoting.
 
-Download and view this video-demo of the setup: https://github.com/erlwes/WinRM-Cloak/blob/main/DEMO.mkv
+Download and view this video-demo of the setup:
+https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
+
+
 
 ### This is the idea:
 1. The default port on WinRM-server is changed, so that it is no longer listening on 5985/5986
