@@ -7,7 +7,7 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 
 
 ### This is the idea:
-1. The default port on WinRM-server is changed, so that it is no longer listening on 5985/5986
+1. The default port on WinRM-service is changed, so that it is no longer listening on 5985/5986
 2. The default PSSession configurations are removed, so that one will have to specify correct name for existing session config in order to connect
 3. The WinRM service is not running by default
 4. A listener on UDP port 10000 is waiting for the correct TOTP code, if received, then starts WinRM-service for 10 minutes
@@ -23,9 +23,10 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 2. Use of WinRM over HTTPS or SSH (now possible)
 
 ### Combine with
-1. Strict firewall rules, so that other remoting and attack vectors are unavaliable (eg. RDP, SMB etc.)
-2. Logging of attempts vs. default WinRM-ports
-3. Non-default username for pivileged accounts with remoting enabled (eg. not username "Administrator" or "Admin")
+1. New non-default ports that are not part of nmap top 10000 ports, or in the high/dynamic range :) (nmap --top-ports 10000 localhost -v -oG -)
+2. Strict firewall rules, so that other remoting and attack vectors are unavaliable (eg. RDP, SMB etc.)
+3. Logging of attempts vs. default WinRM-ports
+4. Non-default username for pivileged accounts with remoting enabled (eg. not username "Administrator" or "Admin")
 
 ### Example setup and testing
 ```PowerShell
