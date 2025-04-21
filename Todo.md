@@ -13,6 +13,9 @@
 
 ### Service security
 * Make sure service path has no spaces, and/or is not unquoted
+```PowerShell
+sc.exe create MyService binPath= "`"C:\Program Files\srvstart\srvstart.exe`" MyService"
+```
 * Make sure that correct ACL is set on service folder/location
   * .ini contains seed key and point to the script that should run and the .ps1 can be modified for code execution as fit
 
