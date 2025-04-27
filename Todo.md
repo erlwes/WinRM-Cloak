@@ -23,6 +23,11 @@ sc.exe create MyService binPath= "`"C:\Program Files\srvstart\srvstart.exe`" MyS
 * Implement actions on service crash, stop or OS-shutdown! ⚠️
 * Consider converting to NSSM for service creation?
 
+### Service logging
+* Some logging, like expected OTP value (debug only), and initiall seed-key (never) should not be logged to eventviwer.
+* If a user has remote eventlog viwer rights, or all logs (including custom logs) are gathered in a SIEM, this info is not protected.
+* Solution? Make a debug parameter for expected vs. received OTP, not log by default.
+
 ### Service installer
 * Verify that it is listening to expected port after starting (method is already in place inside monitor function)
 * Make optional parameter so specify service install folder (some comments on folder ACL?)
