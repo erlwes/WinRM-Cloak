@@ -1,20 +1,21 @@
 <#
   .SYNOPSIS
-    A script for cloaking PowerShell remoting (WinRM-service), by hiding the service when not explicitly unlocked/started by sending a secret string to a listener.
+    A script for installing, removing and monitor the WinRM-cloak service.
 
   .DESCRIPTION
-    The script install a gatekeeper/cloak-service that will start WinRM-service only when a secret string is sent to listener
-        - Deploys a PowerShell UDP-listener as a service
-        - This service will listen for data on a specified UDP port (no reply back to sender)
-        - If correct string is received -> Start WinRM-service, Sleep for x amount of seconds and stop WinRM-service again
-        - This means that you have to do a secret knock on door A, for door B to open
+    The script installs a service that will make the WinRM-service avaliable, only after a valid TOTP is received.
 
-    Thoughts/general considerations
-    1. When selecting a port. Avoid commons ports. One way of doing this would be to pick a port
-       that is not on nmap top port list (nmap --top-ports 20000 localhost -v -oG -).
-    2. Where ever you decide to drop the service script on disk, make sure that ...
-        A) Folder/file-ACL does not allow the script to be edited by non-administrators (service hijacking). Running as system by default.
-        B) Folder/file-ACL does not allow the script to be read by non-administrators, Secret string is hardcoded in listener script for now.
+        1. Takes controll over WinRM-service
+            * Stops WinRM-service and change startup type to manual
+            * Removes default WinRM firewall-rules, and creates one custom-rule to control PowerShell remote access
+        2. Deploys a UDP-listener
+            * Listener wait for a valid TOTP to be received
+            * Listener is designed to be invisible. It has no responsebuffer, and should not send any data in return
+        3. Open WinRM for IPs sending correct TOTP
+            * When a valid OTP is received, the sender IP is added to WinRM-firewall rule, and the WinRM-service is started for configured amout of time, and the listener stops processing incomming data
+            * When time is up (600 sec default), the firewall rule is disabled, the WinRM-service is stopped, and the listener starts listening again
+    
+    In short: you have to do a secret knock on door A, for door B to be uncloaked/revealed
 #>
 
 #Requires -RunAsAdministrator
@@ -63,6 +64,26 @@ Function Write-Log {
         $LogErrors += $Message
     }
 }
+function Convert-Base32ToBytes {
+    param ([string]$base32)
+    $base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    $bytes = @()
+    $base32 = $base32.ToUpper().Replace("=", "")
+    $bitBuffer = 0
+    $bitBufferLength = 0
+
+    foreach ($char in $base32.ToCharArray()) {
+        $bitBuffer = ($bitBuffer -shl 5) -bor ($base32Alphabet.IndexOf($char))
+        $bitBufferLength += 5
+
+        while ($bitBufferLength -ge 8) {
+            $bitBufferLength -= 8
+            $bytes += [byte](($bitBuffer -shr $bitBufferLength) -band 0xFF)
+        }
+    }
+
+    return ,$bytes
+}
 function New-Base32SecretKey {
     param (
         [int]$length = 32
@@ -76,7 +97,40 @@ function New-Base32SecretKey {
     }
     return $seedKey
 }
+function Get-TOTP {
+    param (
+        [string]$secret,
+        [int]$digits = 6,
+        [int]$interval = 30
+    )   
+    
+    # Convert secret to byte array
+    $keyBytes = Convert-Base32ToBytes -base32 $secret
+   
+    $unixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $currentStep = [int64]($unixTime / $interval)
+    $results = @()
 
+    foreach ($stepOffset in -1..0) {
+        $step = $currentStep + $stepOffset
+        $stepBytes = [BitConverter]::GetBytes([System.Net.IPAddress]::HostToNetworkOrder($step))
+
+        $hmac = New-Object System.Security.Cryptography.HMACSHA1
+        $hmac.Key = $keyBytes
+        $hash = $hmac.ComputeHash($stepBytes)
+
+        $offset = $hash[-1] -band 0x0F
+        $binary =
+            (($hash[$offset] -band 0x7F) -shl 24) -bor
+            (($hash[$offset + 1] -band 0xFF) -shl 16) -bor
+            (($hash[$offset + 2] -band 0xFF) -shl 8) -bor
+            ($hash[$offset + 3] -band 0xFF)
+
+        $otp = $binary % [math]::Pow(10, $digits)
+        $results += $otp.ToString().PadLeft($digits, '0')
+    }
+    return $results
+}
 switch ($PSCmdlet.ParameterSetName) {
     'Remove'  {        
         Write-Host "[REMOVING SERVICE]" -ForegroundColor Cyan
@@ -149,12 +203,13 @@ switch ($PSCmdlet.ParameterSetName) {
                 }
                 elseif($CloakService.State -eq 'Running') {
 
-                    Clear-Variable ServiceChildProcess, UDPEndpoint -ErrorAction SilentlyContinue
+                    Clear-Variable ServiceChildProcess, UDPEndpoint, TOTPs -ErrorAction SilentlyContinue
                     $ServiceChildProcess = Get-CimInstance Win32_Process | Where-Object {$_.ParentProcessId -eq $CloakService.ProcessId}
                     $UDPEndpoint = Get-NetUDPEndpoint -OwningProcess $ServiceChildProcess.ProcessId
+                    $TOTPs = Get-TOTP -secret $seedkey
 
                     Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
-                    Write-Host "WinRM-Cloak is running (UDP $($UDPEndpoint.LocalPort))" -ForegroundColor Green
+                    Write-Host "WinRM-Cloak is running on UDP port $($UDPEndpoint.LocalPort) (OTP-current: $($TOTPs[1]) OTP-prev: $($TOTPs[0]))" -ForegroundColor Green
                 }
 
                 '';Write-Host "[LAST 10 EVENTS]" -ForegroundColor Cyan
@@ -162,6 +217,12 @@ switch ($PSCmdlet.ParameterSetName) {
                 Start-Sleep -s 2
             }
         }
+
+        #Seed key from .ini
+        $regex = [regex]::new('\b[A-Z2-7]{32}\b', [System.Text.RegularExpressions.RegexOptions]::None)
+        $seedMatches = $regex.Matches((Get-Content $PSScriptRoot\WinRM-Cloak-Service.ini))
+        $seedkey = $seedMatches.value
+        
         Invoke-WinRMMonitor;Break
     }
     'Install' {
@@ -221,7 +282,7 @@ switch ($PSCmdlet.ParameterSetName) {
         #Region Firewall
         # OPEN UDP LISTERNER/DOORKEEPER PORT
         $FirewallParam2 = @{
-            DisplayName = 'WinRM - Doorkeeper service'
+            DisplayName = 'WinRM - Cloak listener service'
             Description = "Allow Windows to listen on UDP port $CloakPort"
             Direction = 'Inbound'
             LocalPort = $CloakPort
