@@ -1,11 +1,11 @@
 # To-do
 
 ### WinRM-Harden
-* Bug: When checking if port is already in use, I have hard-coded the port number to 139 or something in line 323. Fix so that it checks the correct port and not a static one.
+* Bug: When checking if port is already in use, I have hard-coded the port number to 139 or something in line 323. Fix so that it checks the correct port and not a static one -> Fixed ✅
 * Maybe: Consider to make script fix HTTPS setup or SSH
 
 ### Service functionality
-* When un-cloaking, before starting the service, update the firewall-rule for WinRM, and specify source IP, so that only the IP that provided correct OTP is allowed in firewall-rule.
+* When un-cloaking, before starting the service, update the firewall-rule for WinRM, and specify source IP, so that only the IP that provided correct OTP is allowed in firewall-rule ✅
   * I did initialy want to disable the firewall rule after a short time, but this terminated the WinRM-session (same happens with RDP over TCP regardless of NLA). I was sure that existing sessions was kept alive, but nay
   * To avoid open ports avaliable for 600 sec (or whatever time configured), filtering by IP is the second best option (that I can think of)
 * Idea
@@ -24,9 +24,9 @@ sc.exe create MyService binPath= "`"C:\Program Files\srvstart\srvstart.exe`" MyS
 * Consider converting to NSSM for service creation?
 
 ### Service logging
-* Some logging, like expected OTP value (debug only), and initiall seed-key (never) should not be logged to eventviwer.
+* Some logging, like expected OTP value (debug only), and initiall seed-key (never) should not be logged to eventviwer ➗ (OTP still exposed. Moved to monitor, but noe removed from eventlogs)
 * If a user has remote eventlog viwer rights, or all logs (including custom logs) are gathered in a SIEM, this info is not protected.
-* Solution? Make a debug parameter for expected vs. received OTP, not log by default.
+* Solution? Make a debug parameter for expected vs. received OTP, not log by default ✅
 
 ### Service installer
 * Verify that it is listening to expected port after starting (method is already in place inside monitor function)
