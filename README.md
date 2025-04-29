@@ -18,15 +18,14 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can enumerate the session configs remote?
 4. Have a username and a password for the remote server, and connect to it
 
-### The POC does not cover
-1. JIT for the session-config
-2. Use of WinRM over HTTPS or SSH (now possible)
-
 ### Combine with
-1. New non-default ports that are not part of nmap top 10000 ports, or in the high/dynamic range :) (nmap --top-ports 10000 localhost -v -oG -)
-2. Strict firewall rules, so that other remoting and attack vectors are unavaliable (eg. RDP, SMB etc.)
-3. Logging of attempts vs. default WinRM-ports
-4. Non-default username for pivileged accounts with remoting enabled (eg. not username "Administrator" or "Admin")
+1. JIT on the PSSession configuration for limiting
+2. HTTPS or SSH as bearer
+3. New non-default ports that are not part of nmap top 10000 ports, or in the high/dynamic range :) (nmap --top-ports 10000 localhost -v -oG -)
+4. Strict firewall rules, so that other remoting and attack vectors are unavaliable (eg. RDP, SMB etc.)
+5. Logging of attempts vs. default WinRM-ports
+6. Non-default username for pivileged accounts with remoting enabled (eg. not username "Administrator" or "Admin")
+7. Scriptblock logging/transcripts
 
 ### Example setup and testing
 ```PowerShell
