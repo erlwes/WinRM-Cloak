@@ -1,15 +1,12 @@
 # To-do
 
 ### WinRM-Harden
-* Bug: When checking if port is already in use, I have hard-coded the port number to 139 or something in line 323. Fix so that it checks the correct port and not a static one -> Fixed ✅
 * Maybe: Consider to make script fix HTTPS setup or SSH
 
 ### Service functionality
-* When un-cloaking, before starting the service, update the firewall-rule for WinRM, and specify source IP, so that only the IP that provided correct OTP is allowed in firewall-rule -> Fixed ✅
-  * I did initialy want to disable the firewall rule after a short time, but this terminated the WinRM-session (same happens with RDP over TCP regardless of NLA). I was sure that existing sessions was kept alive, but nay
-  * To avoid open ports avaliable for 600 sec (or whatever time configured), filtering by IP is the second best option (that I can think of)
-* Idea
-  * Instead of using static TCP-port on WinRM-service, the port could be mutating/changed before each start. Something known to both client and server, for example 3000 + current day of month, or something else known to both server and client
+* Mutation -> Tested. Works. Make optional.
+  * Using same seed as OTP, but set to 1 hour rotation (3600 sec) and 2 digits. Now both server and client know the same 2 digit 10..99. So I can use baseport + mutationport to determine current port. Loop inside service will check this every 40 sec and update to new listenerport if changed.
+  * Other ideas: Could be checking the temperature in a specific place, then adding or subracting from base-port on temperature value. Let external API do the rounding og decimals. Could use date or time.. could do alot of things, but some require internet connection -> avoid.
 
 ### Service security
 * Make sure service path has no spaces, and/or is not unquoted
@@ -18,6 +15,21 @@ sc.exe create MyService binPath= "`"C:\Program Files\srvstart\srvstart.exe`" MyS
 ```
 * Make sure that correct ACL is set on service folder/location
   * .ini contains seed key and point to the script that should run and the .ps1 can be modified for code execution as fit
+
+### WSMan ennumeration
+If the attacker has uncloaked WSMAN, found the correct port, and have username and password - the PSSessionConfigurationName could be ennumerated like so:
+```PowerShell
+Connect-WSMan 10.100.100.10 -Port 3000 -Credential (Get-Credentials)
+Get-ChildItem WSMan:\10.100.100.10\Plugin\
+```
+
+We can not set AllowRemoteAccess to false, as this affects PowerShell remoting too (unless using ssh).
+What we can do is changing the ACL on the remote system, so that only admins can ennumerate:
+```PowerShell
+Set-Item WSMan:\localhost\Service\RootSDDL "O:NSG:BAD:P(A;;GA;;;BA)"
+```
+Will not help if credentials has admin-rights.
+
 
 ### Service core behaviour
 * Implement actions on service crash, stop or OS-shutdown! ⚠️
