@@ -28,7 +28,7 @@ What we can do is changing the ACL on the remote system, so that only admins can
 ```PowerShell
 Set-Item WSMan:\localhost\Service\RootSDDL "O:NSG:BAD:P(A;;GA;;;BA)"
 ```
-Will not help if credentials has admin-rights.
+Will not help if credentials has admin-rights, but a non-admin user that is a member of "Remote Management Users", would then be able to use ps-remoting, but not ennumerate session-configuration.
 
 
 ### Service core behaviour
