@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 ### The attacker would have to
 1. Figure out that a listener is active on UDP 10000 (nmap will not detect. No resposebuffer on listener/no reply is returned)
 2. Figure out the correct seed/key in order to generate the correct OTP that is accepted by the listener, which in turn opens WinRM on TCP 3000 (non-default port)
-3. Guess the correct PSSession configuration name (defaults are removed). I dont think one can enumerate the session configs remote?
+3. Guess the correct PSSession configuration name (defaults are removed), or know how to ennumerate these when having username, password and correct port.
 4. Have a username and a password for the remote server, and connect to it
 
 ### Combine with
