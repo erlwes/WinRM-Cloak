@@ -28,7 +28,7 @@ What we can do is change the ACL on the remote system, so that only interactive 
 ```PowerShell
 Set-Item WSMan:\localhost\Service\RootSDDL 'O:NSG:BAD:P(A;;GR;;;IU)(A;;GX;;;IU)(A;;GX;;;BA)(A;;GX;;;RM)'
 ```
-This ACL seems to give access denied when listing plugins using connect-wsman while still allowing ps-remoting, and local users to list sessions 😁. Need to verify potential side-effects.
+This ACL seems to give access denied when listing plugins using connect-wsman while still allowing ps-remoting, and access for local/interactive sessions 😁. Need to verify potential side-effects.
 
 ### Service core behaviour
 * Implement actions on service crash, stop or OS-shutdown! ⚠️
