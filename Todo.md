@@ -24,12 +24,11 @@ Get-ChildItem WSMan:\10.100.100.10\Plugin\
 ```
 
 We can not set AllowRemoteAccess to false, as this affects PowerShell remoting too (unless using ssh).
-What we can do is changing the ACL on the remote system, so that only admins can ennumerate:
+What we can do is changing the ACL on the remote system, so that only interactive users can ennummerate (local sessions)
 ```PowerShell
-Set-Item WSMan:\localhost\Service\RootSDDL "O:NSG:BAD:P(A;;GA;;;BA)"
+Set-Item WSMan:\localhost\Service\RootSDDL 'O:NSG:BAD:P(A;;GR;;;IU)(A;;GX;;;IU)(A;;GX;;;BA)(A;;GX;;;RM)'
 ```
-Will not help if credentials has admin-rights, but a non-admin user that is a member of "Remote Management Users", would then be able to use ps-remoting, but not ennumerate session-configuration.
-
+This seems to give access denied when listing plugins using connect-wsman while still allowing ps-remoting, and local users to list sessions 😁
 
 ### Service core behaviour
 * Implement actions on service crash, stop or OS-shutdown! ⚠️
