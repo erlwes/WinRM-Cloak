@@ -1,11 +1,15 @@
 # WinRM-Cloak
 Hardening and cloaking of PowerShell-remoting. In short making the WinRM-service avoid detection of nmap/port-scans, add 2FA protection using OTP and a few other security by obscurity changes to the service.
-The usecase I had in mind, was protecting a jumpstation/paw/entry point. Not running this service everywhere.
 
-## Video demo (older version)
+I was inspired to create this service after learning a lot about PowerShell-remoting from the great [Yossi Sassi (1nTh35h3ll)](https://github.com/YossiSassi) on his 4-day "PowerShell for Security Professionals"-course @ HackCon #19. The course made an impression on we, and changed my mindset on how I approch defensive IT-security.
+
+The usecase I had in mind, was protecting a jumpstation/paw/entry point. Not running this service "everywhere".
+
+## Video demo (of old version)
 
 https://github.com/user-attachments/assets/e9a98058-e1a6-46f8-8fc7-5b00ee3f0750
 
+No video of new version. Yet.
 
 ### This is the idea:
 1. The default port on WinRM-service is changed, so that it is no longer listening on 5985/5986
