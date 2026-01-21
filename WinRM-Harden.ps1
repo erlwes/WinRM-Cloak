@@ -8,19 +8,10 @@
     1. Change the default port on the WinRM-service.
         - This will make the job harder for an attacker. Attackers will not always take time to scan all ports, especially not the dynamic/high ranges.        
 
-    2. Disable default session configurations and create a custom session configuration
+    2. Disable default session configurations and create a custom session configuration (Windows PowerShell only, not PowerShell Core)
         - When default sc is disabled/not avaliable, the client will have to specify the correct configuration name when doing PS-remoting.
-        - Unless an attacker finds correct config name in eventlog, transcripts, history, ps-readline or elsewhere, they would have to guess/bruteforce it.
-        - Created session configurations can be removed like so: 'Unregister-PSSessionConfiguration -Name MySessionConfig'
-        - ! This session configuration in this scrips is not limited and has all capabilities !        
-    
-    Thoughts/general considerations
-    1. When selecting a port. Avoid commons ports. One way of doing this would be to pick a port
-       that is not on nmap top port list (nmap --top-ports 20000 localhost -v -oG -) OR choosing a high/dynamic port.
-    2. The PowerShell session configuration created by this script is not limited (all capabilities).
-    3. Consider limiting this session config by setting language mode, limiting capabilities with JEA and using a virtual account.
-    4. In domain environments, try to use FQDN/hostname when PS-remoting. If you dont, NTLM will be used instead of kerberos. Authentication Negotiate = NTLM.
-    5. Avvoid default/common username for administrative accounts, and enforce strong passwords
+        - Created session configurations can be removed like so: 'Unregister-PSSessionConfiguration -Name MySessionConfig', or by running script with -Reset parameter
+        - Attacker will have to know how to ennumerate session configurations and use the correct one in order to connect.
 #>
 
 #Requires -RunAsAdministrator
@@ -33,7 +24,10 @@ Param (
     [string]$PSSessionConfName,
 
     [Parameter(Mandatory = $false)]
-    [switch]$Harden
+    [switch]$Harden,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Reset
 )
 
 Function Write-Log {
@@ -42,7 +36,7 @@ Function Write-Log {
         [int]$Level,
 
         [Parameter(Mandatory=$true)]
-        [string]$Message            
+        [string]$Message
     )
     $Message = $Message.Replace("`r",'').Replace("`n",' ')
     switch ($Level) {
@@ -61,7 +55,7 @@ Function Write-Log {
         Write-Host ("`t " + $Message) -ForegroundColor 'Cyan'
     }
     else {
-        Write-Host ("`t " + $Message) -ForegroundColor 'White'        
+        Write-Host ("`t " + $Message) -ForegroundColor 'White'
     }
 
     if ($Level -eq 3) {
@@ -162,7 +156,7 @@ if ($Listeners) {
         }
         Write-Log -Level 0 -Message "HTTP-port is $HTTPPort ($HTTPPortType)"
         if ($ComputerSystem.PartOfDomain -eq $false) {
-            Write-Log -Level 2 -Message 'HTTP+WORKGROUP: Kerberos-auth can not be used in a workgroup environment!'            
+            Write-Log -Level 2 -Message 'HTTP+WORKGROUP: Kerberos-auth can not be used in a workgroup environment!'
             Write-Log -Level 2 -Message 'HTTP+WORKGROUP: WinRM should be HTTPS, if not, NTLM-auth will be sent in cleartext over the network!'
         }
         else {
@@ -183,13 +177,12 @@ if ($Listeners) {
         else {
             $HTTPSPortType = 'custom'
         }
-        Write-Log -Level 0 -Message "HTTPS-port is $HTTPPort ($HTTPSPortType)"    
+        Write-Log -Level 0 -Message "HTTPS-port is $HTTPPort ($HTTPSPortType)"
     }
     else {
         Write-Log -Level 0 -Message 'HTTPS is not in use'
         if ($ComputerSystem.PartOfDomain -eq $false) {
-            Write-Log -Level 2 -Message "WORKGROUP: HTTPS should be used, since this computer is in a WORKGROUP!"
-            Write-Log -Level 2 -Message "WORKGROUP: Basic- and negotiate/NTLM authentication will be sent cleartext over the network when using HTTP!"
+            Write-Log -Level 2 -Message "WORKGROUP: HTTPS should be prefered, since this computer is in a WORKGROUP! (no kerberos)"
         }
     }
 
@@ -248,12 +241,65 @@ else {
 #Endregion Tests
 
 
+if ($Reset) {
+    '';Write-Log -Level 4 -Message 'RESET'
+    # PSSessionConfiguration -> Enable defaults
+    if ($Host.Version.Major -eq 7) {        
+        $NonDefault = $CurrentSessionConfigs | Where-Object {$_.Name -notmatch 'PowerShell7*' -and $_.Enabled -eq $true}
+    }
+    elseif ($Host.Version.Major -eq 5) {        
+        $NonDefault = $CurrentSessionConfigs | Where-Object {$_.Name -notmatch 'PowerShell7*' -and $_.Enabled -eq $true}
+    }    
+
+    # PSSessionConfiguration -> Remove custom
+    $NonDefault | ForEach-Object {
+        Unregister-PSSessionConfiguration -Name $_.Name -Force -Confirm:$true
+        Write-Log -Level 1 -Message "Unregister-PSSessionConfiguration - Unregistered '$($_.Name)'"
+    }
+
+    # WinRM Service -> Set Default port
+    Foreach ($Listener in $Listeners) {
+        switch($Listener.transport) {
+            HTTP {$DefaultHTTPPort = 5985}
+            HTTPS {$DefaultHTTPPort = 5986}
+        }
+        try { 
+            Set-WSManInstance -ResourceURI 'winrm/config/Listener' -SelectorSet @{Address=$Listener.Address;Transport=$Listener.Transport} -ValueSet @{Port="$DefaultHTTPPort"} -ErrorAction Stop | Out-Null
+            Write-Log -Level 1 -Message "Set-WSManInstance - Set port '$DefaultHTTPPort' for transport '$($Listener.Transport)"
+        }
+        catch {
+            Write-Log -Level 3 -Message "Set-WSManInstance - Failed to set port '$DefaultHTTPPort' for transport '$($Listener.Transport). Error: $($_.Exception.Message)"
+        }
+    }
+
+    # Delete custom firewall rules
+    $Rules = Get-NetFirewallRule | Where-Object {$_.DisplayName -match "WinRM * custom port"}
+    
+    if ($Rules) {
+        $Rules | Remove-NetFirewallRule -Confirm:$false
+    }
+    else {
+        #
+    }
+
+    # Re-enable default profiles + firewall rules + startup automatic + start service
+    Enable-PSRemoting -Force
+    
+    Break
+}
+
+
 #Region ParameterLogic
-if (!$Harden -or !$WinRMPort -or !$PSSessionConfName) {
-    '';Write-Log -Level 2 -Message "TO MAKE CHANGES, USE '-Harden' parameter together with '-WinRMPort' -and '-PSSessionConfName'";''
+if (!$Harden -or !$WinRMPort -or !$PSSessionConfName -and !$Reset) {
+    ''
+    Write-Log -Level 2 -Message "TO MAKE CHANGES, USE '-Harden' parameter together with '-WinRMPort' -and '-PSSessionConfName'"
+    Write-Log -Level 2 -Message "TO RESET, USE '-Reset'"
+    ''
     Break
 }
 #Endregion ParameterLogic
+
+
 
 
 #Region WinRM
@@ -266,7 +312,7 @@ try {
     }
     elseif ($Host.Version.Major -eq 5) {
         $DefaultSessionConfigs =  $CurrentSessionConfigs | Where-Object {$_.Name -match 'microsoft.*' -and $_.Enabled -eq $true}
-    }
+    }    
     $DefaultSessionConfigs | ForEach-Object {
         Disable-PSSessionConfiguration -Name $_.Name -Force -Confirm:$false -ErrorAction Stop
         Write-Log -Level 1 -Message "Disable-PSSessionConfiguration - Disabled '$($_.Name)'"
@@ -284,7 +330,7 @@ if ($Exist -and $Exist.Enabled -eq $true) {
     Write-Log -Level 0 -Message "Get-PSSessionConfiguration - '$PSSessionConfName' already exist, and is enabled"
 }
 elseif ($Exist -and $Exist.Enabled -eq $false) {
-    Write-Log -Level 2 -Message "Get-PSSessionConfiguration - '$PSSessionConfName' already exist, but is disabled"        
+    Write-Log -Level 2 -Message "Get-PSSessionConfiguration - '$PSSessionConfName' already exist, but is disabled"
     try {
         Enable-PSSessionConfiguration -Name $PSSessionConfName -Confirm:$false -ErrorAction Stop
         Write-Log -Level 1 -Message "Enable-PSSessionConfiguration - '$PSSessionConfName' was enabled"
@@ -320,7 +366,7 @@ if ($WinRMPort -ne $ListenerToConfigure.Port) {
         Clear-Variable BusyTCPPorts -ErrorAction SilentlyContinue
         $BusyTCPPorts = Get-NetTCPConnection | Select-Object -ExpandProperty LocalPort -Unique
         if ($BusyTCPPorts -match "^$WinRMPort$") {
-            Write-Log -Level 2 -Message "Get-NetTCPConnection - TCP port $WinRMPort is in use. Process: '$((Get-NetTCPConnection -LocalPort 139 | ForEach-Object {Get-Process -Id $_.OwningProcess | Select-Object -ExpandProperty Name})[0])'"
+            Write-Log -Level 2 -Message "Get-NetTCPConnection - TCP port $WinRMPort is in use. Process: '$((Get-NetTCPConnection -LocalPort $WinRMPort | ForEach-Object {Get-Process -Id $_.OwningProcess | Select-Object -ExpandProperty Name})[0])'"
             Write-Log -Level 2 -Message 'Script aborted'
             Break
         }
