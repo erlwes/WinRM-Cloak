@@ -98,7 +98,7 @@ Foreach ($thing in $need) {
 }
 ```
 
-### 2. Install service on a "server"
+### 2. Install service on a server
 ```PowerShell
 Set-Location $env:windir\WinRM-Cloak
 $WinRMPort = 30834
@@ -125,4 +125,19 @@ $Parameters = @{
 }
 
 .\WinRM-DecloakAndConnect.ps1 @Parameters
+```
+
+### 4. Monitor service on server
+Passive monitoring by checking eventlogs, services and netstat.
+```PwSh
+cd $env:windir\WinRM-Cloak
+.\WinRM-Cloak-Manager.ps1 -Monitor
+```
+
+### 4. Remove cloak-service and hardening on server
+Passive monitoring by checking eventlogs, services and netstat.
+```PwSh
+cd $env:windir\WinRM-Cloak
+.\WinRM-Cloak-Manager.ps1 -Remove
+.\WinRM-Harden.ps1 -Reset
 ```
