@@ -6,10 +6,10 @@ Param (
     [int]$WinRMPort,
 
     [Parameter(Mandatory = $false)]
-    [string]$TOTP, #If TOTP is read directly from authenticator. No worries if this is logged to disk.
+    [string]$TOTP, #If TOTP is from authenticator.
 
     [Parameter(Mandatory = $false)]
-    [string]$TOTPSecretKey, #If OTP needs to be calulated from seed key/secret key. For testing. This key needs to be 16,32 or 64 characters long and consit of uppercase A-Z and digits 2-7 (Base32).
+    [string]$TOTPSecretKey, #User to calulated TOTP live from seed key/secret key (testing). This key needs to be 16,32 or 64 characters long and consit of uppercase A-Z and digits 2-7 (Base32).
 
     [Parameter(Mandatory = $false)]
     [string]$Computer = 'localhost',
@@ -169,7 +169,7 @@ function Get-OTP {
 $ComputerSystem = Get-WmiObject Win32_ComputerSystem
 if ($ComputerSystem.PartOfDomain -eq $false) {
     Write-Log -Level 2 -Message "Computer is not domain joined. Make sure configuration allows for WORKGROUP PSRemoting!"
-    #Set-Item WSMan:\localhost\Client\TrustedHosts -Value "*" -Force
+    Write-Log -Level 2 -Message "To add, run: Set-Item WSMan:\localhost\Client\TrustedHosts -Value '$Computer' -Concatenate -Force"
     #Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
 }
 
@@ -195,15 +195,15 @@ else {
     Start-Sleep -Seconds 5
     Test-TCPPort -Computer $Computer -Port $WinRMPort    
 }
-
+$SessionOption = New-PSSessionOption -OperationTimeout 60000
 if ($Script:Decloaked -eq $true) {
     if (!$PSSessionConfName) {      
-        Write-Log -Level 0 -Message "Attempting to Enter-PSSession on '$Computer' as user '$($Creds.UserName)' using TCP '$WinRMPort'"
-        Enter-PSSession -Port $WinRMPort -ComputerName $Computer -Credential $Creds
+        Write-Log -Level 0 -Message "Attempting to Enter-PSSession on '$Computer' as user '$($Creds.UserName)' using TCP '$WinRMPort'"        
+        Enter-PSSession -Port $WinRMPort -ComputerName $Computer -Credential $Creds -SessionOption $SessionOption
     }
     else {
         Write-Log -Level 0 -Message "Attempting to Enter-PSSession on '$Computer' as user '$($Creds.UserName)' using TCP '$WinRMPort' and session config '$PSSessionConfName'"
-        Enter-PSSession -Port $WinRMPort -ComputerName $Computer -Credential $Creds -ConfigurationName $PSSessionConfName
+        Enter-PSSession -Port $WinRMPort -ComputerName $Computer -Credential $Creds -ConfigurationName $PSSessionConfName -SessionOption $SessionOption
     }
 }
 else {
