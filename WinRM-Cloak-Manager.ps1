@@ -13,9 +13,9 @@
             * Listener is designed to be invisible. It has no responsebuffer, and should not send any data in return
         3. Open WinRM for IPs sending correct TOTP
             * When a valid OTP is received, the sender IP is added to WinRM-firewall rule, and the WinRM-service is started for configured amout of time, and the listener stops processing incomming data
-            * When time is up (600 sec default), the firewall rule is disabled, the WinRM-service is stopped, and the listener starts listening again
+            * When time is up (1800 sec default), the firewall rule is disabled and the WinRM-service is shut down
     
-    In short: you have to do a secret knock on door A, for door B to be uncloaked/revealed
+    In short: you have to do a secret knock on door A, for door B to be uncloaked/revealed (port-knocking)
 #>
 
 #Requires -RunAsAdministrator
@@ -32,7 +32,7 @@ Param (
 )
 
 # [FUNCTIONS]
-Function Write-Log {
+function Write-Log {
     param(
         [ValidateSet(0, 1, 2, 3, 4)]
         [int]$Level,
@@ -88,9 +88,9 @@ function New-Base32SecretKey {
     param (
         [int]$length = 32
     )    
-    $base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"    
+    $base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     $seedKey = ""   
-    for ($i = 0; $i -lt $length; $i++) {        
+    for ($i = 0; $i -lt $length; $i++) {
         $randomIndex = Get-Random -Minimum 0 -Maximum $base32Alphabet.Length
         $randomChar = $base32Alphabet[$randomIndex]
         $seedKey += $randomChar
@@ -131,11 +131,62 @@ function Get-TOTP {
     }
     return $results
 }
+function Get-NSSM {
+    $nssmVersion = 'nssm-2.24-103-gdee49fc'
+
+    # Download NSSM
+    While (!(Test-Path .\$nssmVersion.zip)) {	    
+	    try {
+            Invoke-WebRequest "https://nssm.cc/ci/$($nssmVersion).zip" -Outfile "$PSScriptRoot\$nssmVersion.zip" -ErrorAction Stop
+            Write-Log -Level 1 -Message "Invoke-WebRequest - Downloaded NSSM (Non-Sucking Service Manager)"
+        }
+        catch {
+            # Unreliable NGIX-server, so we might have to try several times.
+        }
+	    Start-Sleep -Seconds 2
+    }
+
+    # Verify SHA1-hash
+    $SHA1 = '0722c8a775deb4a1460d1750088916f4f5951773' #https://nssm.cc/builds
+    $SHA1DownloadedFile = (Get-FileHash "$PSScriptRoot\$nssmVersion.zip" -Algorithm SHA1).Hash
+    if ($SHA1 -eq $SHA1DownloadedFile) {        
+        Write-Log -Level 1 -Message "Get-FileHash - File-hash for download is correct"
+    }
+    else {
+        Write-Log -Level 2 -Message "Get-FileHash - File-hash does not match!"
+        Break
+    }
+
+    # Extract archive
+    try {
+        Expand-Archive "$PSScriptRoot\$nssmVersion.zip" -ErrorAction Stop
+        Write-Log -Level 1 -Message "Expand-Archive - Archive extracted to '$PSScriptRoot\$nssmVersion.zip'"
+    }
+    catch {
+        Write-Log -Level 3 -Message "Expand-Archive - Failed to extract archive to '$PSScriptRoot\$nssmVersion.zip'. Error: $($_.Exception.Message)"
+        Break
+    }
+
+    # Get required x86 NSSM-files from Archive
+    Write-Log -Level 1 -Message "Copy-Item - Copy the required files from extracted folder-structure"
+    Copy-Item .\$nssmVersion\$nssmVersion\win32\nssm.* $PSScriptRoot -Force
+
+    # Delete archive and extracted folder structure
+    Write-Log -Level 1 -Message "Remove-Item - Delete extracted folder and items archive ('$PSScriptRoot\$nssmVersion')"
+    Remove-Item "$PSScriptRoot\$nssmVersion" -Recurse
+    
+    Write-Log -Level 1 -Message "Remove-Item - Delete downloaded archive ('$PSScriptRoot\$nssmVersion.zip')"
+    Remove-Item "$PSScriptRoot\$nssmVersion.zip" -Force    
+}
+
 switch ($PSCmdlet.ParameterSetName) {
-    'Remove'  {        
-        Write-Host "[REMOVING SERVICE]" -ForegroundColor Cyan
-        if (Get-Service WinRM-Cloak -ErrorAction SilentlyContinue) {
+    'Remove'  {
+        '';Write-Host "[REMOVING SERVICE]" -ForegroundColor Cyan        
+        $ExistingService = Get-Service WinRM-Cloak -ErrorAction SilentlyContinue
+        if ($ExistingService) {
             Write-Log -Level 0 -Message "Get-Service - Service 'WinRM-Cloak' exists"
+            
+            # Stop the service
             try {
                 Stop-Service WinRM-Cloak -Force -ErrorAction Stop
                 Write-Log -Level 1 -Message "Stop-Service - Service 'WinRM-Cloak' stopped"
@@ -145,20 +196,23 @@ switch ($PSCmdlet.ParameterSetName) {
                 Break
             }
             
-            SC.EXE DELETE WinRM-Cloak | Out-Null
+            # Remove the service
+            .\nssm.exe remove WinRM-Cloak confirm | Out-Null
             if ($LASTEXITCODE -eq 0) {
-                Write-Log -Level 1 -Message "WinRM CLOAK - Service deleted (Exitcode: $LASTEXITCODE)"
+                Write-Log -Level 1 -Message "Remove-Service - Service removed (Exitcode: $LASTEXITCODE)"
             }
             else {
-                Write-Log -Level 3 -Message "WinRM CLOAK - Failed to delete service (Exitcode: $LASTEXITCODE)"
+                Write-Log -Level 3 -Message "Remove-Service - Failed to remove service (Exitcode: $LASTEXITCODE)"
                 Break
             }
         }
         else {
             Write-Log -Level 2 -Message "Get-Service - Service 'WinRM-Cloak' does not exist and can therefore not be removed."
-        }        
+        }
+
+        '';Write-Host "[REMOVING EVENTLOG]" -ForegroundColor Cyan
         try {
-            Get-EventLog -LogName WinRM-Cloak -ErrorAction Stop
+            $Eventlog = Get-EventLog -LogName WinRM-Cloak -ErrorAction Stop
             try {
                 Remove-EventLog -LogName 'WinRM-Cloak' -ErrorAction Stop
                 Write-Log -Level 1 -Message "Remove-EventLog - Eventlog deleted"
@@ -170,9 +224,28 @@ switch ($PSCmdlet.ParameterSetName) {
         catch {
             Write-Log -Level 2 -Message "Get-EventLog - Eventlog 'WinRM-Cloak' does not exist and can therefore not be removed."
         }
+        
+        '';Write-Host "[REMOVING FIREWALL RULES]" -ForegroundColor Cyan
+        $Rules = Get-NetFirewallRule | Where-Object {$_.DisplayName -match "WinRM - Cloak listener service"}
+        if ($Rules) {
+            Write-Log -Level 0 -Message "Get-NetFirewallRule - $($Rules.count) rules found"
+            ForEach ($Rule in $rules) { 
+                try {
+                    $Rule | Remove-NetFirewallRule -Confirm:$false
+                    Write-Log -Level 1 -Message "Remove-NetFirewallRule - Rule '$($Rule.DisplayName)' removed"
+                }
+                catch {
+                    Write-Log -Level 2 -Message "Remove-NetFirewallRule - Failed to remove rule '$($Rule.DisplayName)'. Error: $($_.Exception.Message)"
+                }
+
+            }
+        }
+        else {
+            Write-Log -Level 0 -Message "Get-NetFirewallRule - No rules found"
+        }
     }
     'Monitor' {
-        Function Invoke-WinRMMonitor {            
+        Function Invoke-WinRMMonitor {
             while ($true) {
                 Clear-Host
                 Clear-Variable Port -ErrorAction SilentlyContinue    
@@ -181,22 +254,23 @@ switch ($PSCmdlet.ParameterSetName) {
                 if((Get-Service WinRM).Status -eq 'Stopped') {
                     Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
                     Write-Host "WinRM is stopped (TCP $Port)" -ForegroundColor Yellow
-                    
                 }
                 elseif((Get-Service WinRM).Status -eq 'Running') {
-                    if (Get-PSSession -ComputerName localhost -Port $Port -ErrorAction SilentlyContinue) {
+                    $Connections = Get-PSSession -ComputerName localhost -Port $Port -ErrorAction SilentlyContinue
+                    if ($Connections) {
                         Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
-                        Write-Host "WinRM is running (TCP $Port), and connected" -ForegroundColor Cyan
+                        Write-Host "WinRM is running (TCP $Port), and connected [$($Connections.count)]" -ForegroundColor Cyan
                     }
                     else {
                         Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
-                        Write-Host "WinRM is running (TCP $Port)" -ForegroundColor Green                        
-                    }        
+                        Write-Host "WinRM is running (TCP $Port)" -ForegroundColor Green
+                    }
+                    Clear-Variable Connections
                 }
 
                 Clear-Variable CloakService -ErrorAction SilentlyContinue
                 $CloakService = Get-CimInstance Win32_Service -Filter "Name = 'WinRM-Cloak'"
-                                
+
                 if($CloakService.State -eq 'Stopped') {
                     Write-Host "$((Get-Date).ToString()) " -ForegroundColor DarkGray -NoNewline
                     Write-Host "WinRM-Cloak is stopped ($Port)" -ForegroundColor Yellow
@@ -220,62 +294,90 @@ switch ($PSCmdlet.ParameterSetName) {
 
         #Seed key from .ini
         $regex = [regex]::new('\b[A-Z2-7]{32}\b', [System.Text.RegularExpressions.RegexOptions]::None)
-        $seedMatches = $regex.Matches((Get-Content $PSScriptRoot\WinRM-Cloak-Service.ini))
+        $serviceConfig = .\nssm.exe get WinRM-Cloak AppParameters
+        $seedMatches = $regex.Matches($serviceConfig)
         $seedkey = $seedMatches.value
         
         Invoke-WinRMMonitor;Break
     }
     'Install' {
+        #Region Prereq
+        '';Write-Host "[CHECKING PREREQUISITES]" -ForegroundColor Cyan
+        if (Test-Path "$PSScriptRoot\nssm.exe") {
+            Write-Log -Level 1 -Message "NSSM - Non-Sucking Service Manager found"
+        }
+        else {
+            Write-Log -Level 2 -Message "NSSM - Non-Sucking Service Manager not found. Will download"
+            Get-NSSM
+        }
+        if (!(Test-Path "$PSScriptRoot\nssm.exe")) {
+            Break
+        }
+        #Endregion Prereq
+
+        #Region AleadyInstalled?
+        $ServiceExists = Get-Service WinRM-Cloak -ErrorAction SilentlyContinue
+        if ($ServiceExists) {
+            Write-Log -Level 2 -Message "WinRM Cloak - The service already exitst. Please run script again with -Remove first"
+            Break
+        }
+        #Endregion AleadyInstalled?
+
+        #Region DefaultPortInUse?
+        $Port = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener\*+HTTP\').Port
+        #Endregion DefaultPortInUse?
+
+
         #Region EventViewer
         New-EventLog -Source 'WinRM-Cloak' -LogName 'WinRM-Cloak'
         #Endregion EventViewer
 
         #Region WinRM
-        Write-Host "[INSTALLING SERVICE]" -ForegroundColor Cyan
+        '';Write-Host "[INSTALLING SERVICE]" -ForegroundColor Cyan
         # [WINRM - SET SERVICE STARTUP TO MANUAL]
         try {
             if ((Get-Service WinRM).StartType -ne 'Manual') {
                 Set-Service WinRM -StartupType Manual -ErrorAction Stop    
-                Write-Log -Level 1 -Message "WINRM - Set service startuptype to 'Manual'"
+                Write-Log -Level 1 -Message "WinRM - Set service startuptype to 'Manual'"
             }
             else {
-                Write-Log -Level 0 -Message "WINRM - Service startuptype already set to 'Manual'"
+                Write-Log -Level 0 -Message "WinRM - Service startuptype already set to 'Manual'"
             }
         }
         catch {
-            Write-Log -Level 3 -Message "WINRM - Failed to set service startuptype to 'Manual'. Error: $($_.Exception.Message)"
+            Write-Log -Level 3 -Message "WinRM - Failed to set service startuptype to 'Manual'. Error: $($_.Exception.Message)"
         }
 
         # [WINRM - START SERVICE]
         try {
             if ((Get-Service WinRM).Status -ne 'Running') {
                 Start-Service WinRM -ErrorAction Stop
-                Write-Log -Level 1 -Message 'WINRM - Service started'
+                Write-Log -Level 1 -Message 'WinRM - Service started'
             }
         }
         catch {
-            Write-Log -Level 3 -Message "WINRM - Failed to start service. Error: $($_.Exception.Message)"
+            Write-Log -Level 3 -Message "WinRM - Failed to start service. Error: $($_.Exception.Message)"
             Break
         }
 
         # [WINRM - GET LISTENER]
         try {
             $Listeners = Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate
-            Write-Log -Level 1 -Message "WINRM - Got listener (Transport: $($Listeners.Transport))"
+            Write-Log -Level 1 -Message "WinRM - Got listener (Transport: $($Listeners.Transport))"
         }
         catch {
-            Write-Log -Level 3 -Message "WINRM - Failed to get listener. Error: $($_.Exception.Message)"
+            Write-Log -Level 3 -Message "WinRM - Failed to get listener. Error: $($_.Exception.Message)"
         }
 
         # [WINRM - STOP SERVICE]
         try {
             if ((Get-Service WinRM).Status -eq 'Running') {
                 Stop-Service WinRM -Force -ErrorAction Stop
-                Write-Log -Level 1 -Message 'WINRM - Service stopped'
+                Write-Log -Level 1 -Message 'WinRM - Service stopped'
             }
         }
         catch {
-            Write-Log -Level 3 -Message "WINRM - Failed to stop service. Error: $($_.Exception.Message)"
+            Write-Log -Level 3 -Message "WinRM - Failed to stop service. Error: $($_.Exception.Message)"
         }
         #Endregion WinRM
 
@@ -308,32 +410,20 @@ switch ($PSCmdlet.ParameterSetName) {
 
         # [WinRM-Cloak - Generate TOTP secret key/seed key]
         $TOTPSecretKey = New-Base32SecretKey
-        Write-Log -Level 2 -Message "WinRM CLOAK - Secret key/seed key generated: '$TOTPSecretKey'. This is needed to generate TOTP on client-side"
-
-        # [WinRM-Cloak - Generate service .ini-file]
-        try {
-            $ServiceConfig = @()
-            $ServiceConfig += "[WinRM-Cloak]`n"
-            $ServiceConfig += "startup=C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Unrestricted -NoProfile -File $PSScriptRoot\WinRM-Cloak-Service.ps1 $CloakPort $TOTPSecretKey $($Listeners.Transport)`n"
-            $ServiceConfig += "shutdown_method=kill"
-            $ServiceConfig | Out-File "$PSScriptRoot\WinRM-Cloak-Service.ini" -Force -Encoding ASCII -NoNewline -ErrorAction Stop
-            Write-Log -Level 1 -Message "WinRM CLOAK - Created service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini')"
-            # If you edit the .ini file manually, make sure it is saved as ANSI after changes. The service will not start if UTF8.
-        }
-        catch {
-            Write-Log -Level 3 -Message "WinRM CLOAK - Failed to create service config-file ('$PSScriptRoot\WinRM-Cloak-Service.ini'). Error: $($_.Exception.Message)"
-        }
+        Write-Log -Level 4 -Message "WinRM CLOAK - ####################################################################"
+        Write-Log -Level 4 -Message "WinRM CLOAK - Secret key/seed key generated: '$TOTPSecretKey'"
+        Write-Log -Level 4 -Message "WinRM CLOAK - This is needed to generate TOTP on client-side"
+        Write-Log -Level 4 -Message "WinRM CLOAK - ####################################################################"
 
         # [WinRM-Cloak - Create the service]
-        SC.EXE CREATE WinRM-Cloak Displayname= "WinRM-Cloak" binpath= "$PSScriptRoot\srvstart.exe WinRM-Cloak -c $PSScriptRoot\WinRM-Cloak-Service.ini" start=auto | Out-Null
+        $Binary = (Get-Command Powershell).Source
+        $Arguments = "-ExecutionPolicy Bypass -NonInteractive -NoProfile -File $PSScriptRoot\WinRM-Cloak-Service.ps1 $CloakPort $TOTPSecretKey $($Listeners.Transport)"
+        .\nssm.exe install WinRM-Cloak "$Binary" "$Arguments" | Out-Null        
         if ($LASTEXITCODE -eq 0) {
             Write-Log -Level 1 -Message "WinRM CLOAK - Service created (Exitcode: $LASTEXITCODE)"
         }
-        elseif ($LASTEXITCODE -eq 1073) {
-            Write-Log -Level 2 -Message "WinRM CLOAK - Service 'WinRM-Cloak' already exist (Exitcode: $LASTEXITCODE)"
-        }
-        elseif ($LASTEXITCODE -eq 1072) {
-            Write-Log -Level 3 -Message "WinRM CLOAK - Service 'WinRM-Cloak' is marked for deletion (Exitcode: $LASTEXITCODE)"
+        elseif ($LASTEXITCODE -eq 5) {
+            Write-Log -Level 2 -Message "WinRM CLOAK - Service already exists (Exitcode: $LASTEXITCODE)"
         }
         else {
             Write-Log -Level 3 -Message "WinRM CLOAK - Failed to create service (Exitcode: $LASTEXITCODE)"
@@ -353,3 +443,4 @@ switch ($PSCmdlet.ParameterSetName) {
         #Endregion Cloak service
     }
 }
+''
