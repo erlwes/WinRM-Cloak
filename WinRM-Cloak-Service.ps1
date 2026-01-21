@@ -2,7 +2,8 @@ Param(
     [int]$Port,
     [string]$TOTPSecretKey,
     [string]$WinRMListenerTransport = 'HTTP',
-    [int]$ServiceRunningTime = 600,
+    [int]$SessionDurationInSeconds = 1800,
+    [int]$MaxClients = 3,
     [bool]$Debug = $false
 )
 
@@ -23,176 +24,254 @@ function Convert-Base32ToBytes {
             $bytes += [byte](($bitBuffer -shr $bitBufferLength) -band 0xFF)
         }
     }
-
     return ,$bytes
 }
+
 function Get-TOTP {
     param (
-        [string]$secret,
-        [int]$digits = 6,
-        [int]$interval = 30
+        [string]$Secret,
+        [int]$Digits = 6,
+        [int]$Interval = 30
     )
-    
-    # Convert secret to byte array
-    $keyBytes = Convert-Base32ToBytes -base32 $secret
-   
-    $unixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $currentStep = [int64]($unixTime / $interval)
-    $results = @()
 
-    foreach ($stepOffset in -1..0) {
-        $step = $currentStep + $stepOffset
-        $stepBytes = [BitConverter]::GetBytes([System.Net.IPAddress]::HostToNetworkOrder($step))
+    $KeyBytes = Convert-Base32ToBytes -base32 $Secret
 
-        $hmac = New-Object System.Security.Cryptography.HMACSHA1
-        $hmac.Key = $keyBytes
-        $hash = $hmac.ComputeHash($stepBytes)
+    $UnixTime = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $CurrentStep = [int64]($UnixTime / $Interval)
+    $Results = @()
 
-        $offset = $hash[-1] -band 0x0F
-        $binary =
-            (($hash[$offset] -band 0x7F) -shl 24) -bor
-            (($hash[$offset + 1] -band 0xFF) -shl 16) -bor
-            (($hash[$offset + 2] -band 0xFF) -shl 8) -bor
-            ($hash[$offset + 3] -band 0xFF)
+    foreach ($StepOffset in -1..0) {
+        $Step = $CurrentStep + $StepOffset
+        $stepBytes = [BitConverter]::GetBytes([System.Net.IPAddress]::HostToNetworkOrder($Step))
 
-        $otp = $binary % [math]::Pow(10, $digits)
-        $results += $otp.ToString().PadLeft($digits, '0')
+        $HMAC = New-Object System.Security.Cryptography.HMACSHA1
+        $HMAC.Key = $KeyBytes
+        $Hash = $HMAC.ComputeHash($stepBytes)
+
+        $Offset = $Hash[-1] -band 0x0F
+        $Binary =
+            (($Hash[$Offset] -band 0x7F) -shl 24) -bor
+            (($Hash[$Offset + 1] -band 0xFF) -shl 16) -bor
+            (($Hash[$Offset + 2] -band 0xFF) -shl 8) -bor
+            ($Hash[$Offset + 3] -band 0xFF)
+
+        $OTP = $Binary % [math]::Pow(10, $Digits)
+        $Results += $OTP.ToString().PadLeft($Digits, '0')
     }
-    return $results
+    return $Results
+}
+
+function Sync-WinRMAccess {
+    param(
+        [hashtable]$Clients,
+        [string]$FirewallRule,
+        [bool]$Debug
+    )
+
+    # Cache last-seen state per rule (persists across loop iterations in the same script/module runspace)
+    if (-not $script:WinRMAccessState) { $script:WinRMAccessState = @{} }
+
+    $Now = Get-Date
+
+    # Prune expired clients
+    foreach ($ip in @($Clients.Keys)) {
+        if ($Clients[$ip] -le $Now) {
+            $Clients.Remove($IP) | Out-Null
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 400 -Message "Client Sync: Client '$IP' expired" -EntryType Information
+        }
+    }
+
+    # ---- CHANGE DETECTION (added/expired/expiry-updated) ----
+    # Build a stable fingerprint of current clients+expiry
+    $CurrentState = (
+        $Clients.GetEnumerator() |
+            Sort-Object Name |
+            ForEach-Object {
+                # Use UTC ticks for stable formatting
+                "{0}={1}" -f $_.Key, ([datetime]$_.Value).ToUniversalTime().Ticks
+            }
+    ) -join ';'
+
+    $PreviousState = $script:WinRMAccessState[$FirewallRule]
+    $Changed = ($CurrentState -ne $PreviousState)
+
+    if (-not $Changed) {
+        # No new client and no expiry/removal -> do nothing this iteration
+        return ($Clients.Count -gt 0)
+    }
+
+    # Update cache now that we know it changed, for next loop
+    $script:WinRMAccessState[$FirewallRule] = $CurrentState
+
+    if ($Clients.Count -gt 0) {
+        $IPList = [string[]]$Clients.Keys
+
+        # Ensure firewall rule is enabled and set to allowed IP list
+        try {
+            Set-NetFirewallRule -DisplayName $FirewallRule -Enabled True -RemoteAddress $IPList -ErrorAction Stop
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 200 -Message "Firewall: Rule '$FirewallRule' updated/enabled (allowed: $($IPList -join ','))" -EntryType Information
+        }
+        catch {
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 201 -Message "Firewall: Failed to set rule '$FirewallRule'(allowed: $($IPList -join ',')): $($_.Exception.Message)" -EntryType Error
+        }
+
+        # Ensure WinRM is running (only when changes occurred)
+        if ((Get-Service WinRM).Status -ne 'Running') {
+            Start-Service WinRM -ErrorAction Stop
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 500 -Message "WinRM-service: Started (active clients)" -EntryType Information
+        }
+
+        if ($Debug) {
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message ("Client Sync: Active clients: " + ($ipList -join ', ')) -EntryType Information
+        }
+
+        return $true
+    }
+    else {
+        # No active clients -> close down firewall rule + WinRM service
+        try {
+            Set-NetFirewallRule -DisplayName $FirewallRule -Enabled False -ErrorAction Stop
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 210 -Message "Firewall: Rule '$FirewallRule' disabled" -EntryType Information
+        }
+        catch {
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 211 -Message "Firewall: Failed to disable rule '$FirewallRule': $($_.Exception.Message)" -EntryType Error
+        }
+
+        Stop-WinRM -Context 'no active clients'
+        return $false
+    }
+}
+
+function Stop-WinRM {
+    Param([string]$Context)
+    if ((Get-Service WinRM).Status -ne 'Stopped') {
+        try {
+            Stop-Service WinRM -Force -ErrorAction Stop
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 510 -Message "WinRM-service: Stopped ($Context)" -EntryType Information
+        }
+        catch {
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 511 -Message "WinRM-service: Failed to stop ($Context): $($_.Exception.Message)" -EntryType Error
+        }
+    }
 }
 
 Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 100 -Message "Service starting" -EntryType Information
 
 if ($Debug) {
-    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Parameters: Port = $Port" -EntryType Information   
-    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Parameters: WinRMListenerTransport = $WinRMListenerTransport" -EntryType Information
-    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Parameters: ServiceRunningTime = $ServiceRunningTime" -EntryType Information    
-   #Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Parameters: TOTPSecretKey = $TOTPSecretKey" -EntryType Information
-    # If you uncomment this, be aware that users with remote eventlog reader will be able to see the TOTP secret key, and that the secret could possibly be forwarded into SIEM, syslog and such.
+    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Parameters: Port = $Port" -EntryType Information
+    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Parameters: WinRMListenerTransport = $WinRMListenerTransport" -EntryType Information
+    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Parameters: ServiceRunningTime = $SessionDurationInSeconds" -EntryType Information
+    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Parameters: MaxClients = $MaxClients" -EntryType Information
 }
 
-#Disable Firewall-rule for WinRM
+# Disable Firewall-rule for WinRM and stop WinRM at start
 $FirewallRule = "WinRM - $WinRMListenerTransport custom port"
-try {
-    Set-NetFirewallRule -DisplayName $FirewallRule -Enabled 2 -ErrorAction Stop
-    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 302 -Message "Firewall: Rule '$FirewallRule' disabled" -EntryType Information
-    try{
-        Stop-Service WinRM -ErrorAction Stop
-        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 402 -Message "WinRM-service: Stopped" -EntryType Information
-    }
-    catch {
-        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 404 -Message "WinRM-service: Failed to stop: $($_.Exception.Message)" -EntryType Error
-    }
-}
-catch {
-    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 302 -Message "Firewall: Failed to disable rule '$FirewallRule': $($_.Exception.Message)" -EntryType Error
-}
+Stop-WinRM -Context 'startup'
 
-$endpoint  = new-object System.Net.IPEndPoint( [IPAddress]::Any, $Port)
-$udpclient = new-object System.Net.Sockets.UdpClient $Port
-$udpclient.Client.SendBufferSize = 0
-$udpclient.Client.ReceiveBufferSize = 1
+# UDP listener
+$Endpoint  = New-Object System.Net.IPEndPoint([IPAddress]::Any, $Port)
+$UdpClient = New-Object System.Net.Sockets.UdpClient $Port
+$UdpClient.Client.SendBufferSize = 0
+$UdpClient.Client.ReceiveBufferSize = 1
 
+# Track allowed IPs and their expiry times
+$Clients = @{}
+$WinRMOpen = $false
+
+# Allow some time for listener to get sorted
 [System.Threading.Thread]::Sleep(5000)
 [int]$i = 0
+
+# Start of main loop
 while ($true) {
 
-    # Sleep is for both performance and throttle/limiting
-    # The Start-Sleep cmdlet uses more CPU and gets logged in PowerShell-Operational eventlog for each loop cycle, therefore this method is prefered.
-    [System.Threading.Thread]::Sleep(4000)
+    # Throttle this loop, to limit CPU. Balance between low resource usage and responsiveness.
+    [System.Threading.Thread]::Sleep(3000)
 
-    if ($udpclient.Available) {
-        $content = $udpclient.Receive([ref]$endpoint)
+    # Periodic sync for each loop. Control access for existing clients. Expire and remove, or add (ip in firewall rules)
+    $WinRMOpen = Sync-WinRMAccess -Clients $Clients -FirewallRule $FirewallRule -Debug $Debug
 
-        # Received any data?
-        if ($content) {
+    # Is listener still ready?
+    if ($UdpClient.Available) {
+        $Data = $UdpClient.Receive([ref]$Endpoint)
 
-            $TOTP = Get-TOTP -Secret $TOTPSecretKey
-            $String = [Text.Encoding]::ASCII.GetString($content)
+        # Did it receive any data since last loop?
+        if ($Data) {
 
-            if ($Debug) {
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Content: Expecting One-time password: '$TOTP'" -EntryType Information
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "Content: Recieved '$String'" -EntryType Information
+            # Get client IP
+            $IP = $Endpoint.Address.IPAddressToString
+            $String = [Text.Encoding]::ASCII.GetString($data)
+            [int]$IsInt = $string
+
+            # Empty payload/portscan?
+            if ($String -match '>\?\?\?') {
+                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 312 -Message "Listener: Client '$IP' sendt an empty packet. Typical NMAP." -EntryType Warning
             }
 
-            # Does the content match a valid TOTP (current or previous)?
-            if ($String -eq $TOTP[0] -or $String -eq $TOTP[1]) {
+            # Is the received data a integer? (then go on)
+            elseif ($IsInt -is [int]) {
 
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 201 -Message "UDP-listener: De-cloaking. Valid OTP recieved from $($endpoint.Address.IPAddressToString)" -EntryType Information
-                
-                # Stop buffering data on listener
-                $udpclient.Client.ReceiveBufferSize = 0
-                
-                try {
-                    # Add connecting IP to allowed source in WinRM-firewall rule and enable it
-                    Set-NetFirewallRule -DisplayName $FirewallRule -Enabled 1 -RemoteAddress $($endpoint.Address.IPAddressToString) -ErrorAction Stop
-                    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 301 -Message "Firewall: Rule '$FirewallRule' enabled" -EntryType Information
+                # Calculate the corrent valid TOTPs
+                $TOTP = Get-TOTP -Secret $TOTPSecretKey
 
-                    try {
-                        # Start the WinRM service
-                        Start-Service WinRM -ErrorAction Stop
-                        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 401 -Message "WinRM-service: Started" -EntryType Information
-                        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 100 -Message "Waiting $ServiceRunningTime sec" -EntryType Information
-
-                        # Wait for however long the service should be up after de-cloaked (ServiceRunningTime-parameter)
-                        Start-Sleep -Seconds $ServiceRunningTime
-
-                        try {
-                            # Disable the firewall-rule
-                            # Remote IPs is not reset, this is by design. It will be overwritten on next connection. In case WinRM fails to stop, it is bettered to be filtered on RemoteAddress vs. any.
-                            Set-NetFirewallRule -DisplayName $FirewallRule -Enabled 2 -ErrorAction Stop 
-                            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 302 -Message "Firewall: Rule '$FirewallRule' disabled" -EntryType Information                                         
-                            
-                            try {
-                                # Stop the WinRM service again
-                                Stop-Service WinRM -Force -ErrorAction Stop
-                                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 402 -Message "WinRM-service: Stopped" -EntryType Information
-                                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 202 -Message "UDP-listener: Cloaked" -EntryType Information
-                            }
-                            catch {
-                                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 404 -Message "WinRM-service: Failed to stop: $($_.Exception.Message)" -EntryType Error
-                            }
-                        }
-                        catch {
-                            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 302 -Message "Firewall: Failed to disable rule '$FirewallRule': $($_.Exception.Message)" -EntryType Error
-                        }
-                    }
-                    catch {
-                        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 404 -Message "WinRM-service: Failed to start: $($_.Exception.Message)" -EntryType Error
-                    }
-                }
-                catch {
-                    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 304 -Message "Firewall: Failed to enable rule '$FirewallRule': $($_.Exception.Message)" -EntryType Error
+                # Output valid OTP and revieved OTP to eventlog, if -debug parameter is used.
+                if ($Debug) {
+                    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Content: Expecting One-time password: '$($TOTP -join ',')'" -EntryType Information
+                    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Content: Recieved '$String' from $IP" -EntryType Information
                 }
 
-                # Run garbage collection on the PowerShell.exe process to keep low memory footprint.
-                [System.GC]::Collect()
+                # Check if revieved TOTP is valid (current or previous)
+                if ([int]$IsInt -eq $TOTP[0] -or [int]$IsInt -eq $TOTP[1]) {
 
-                # Start buffering data on listener again
-                $udpclient.Client.ReceiveBufferSize = 1
+                    # Calculate expiry time for this connection
+                    $Now = Get-Date
+                    $Expiry = $Now.AddSeconds($SessionDurationInSeconds)
+
+                    # Verify that max number of clients is not reached.
+                    if (-not $Clients.ContainsKey($IP) -and $Clients.Count -ge $MaxClients) {
+                        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 301 -Message "Listener: Client '$ip' sendt valid OTP, but MaxClients ($MaxClients) is reached. Denied." -EntryType Warning
+                    }
+                    else {
+                        # Add the client to clients list (IP + expiry time)
+                        $Clients[$IP] = $Expiry
+                        Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 300 -Message "Listener: Client '$ip' sendt valid OTP. Access expires $expiry" -EntryType Information
+
+                        # Sync access, so that new client is added to firewall rule immediatly (without waiting for next loop)
+                        $WinRMOpen = Sync-WinRMAccess -Clients $Clients -FirewallRule $FirewallRule -Debug $Debug
+                    }
+                }
+                else {
+                    Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 310 -Message "Listener: Client '$ip' sendt invalid TOTP" -EntryType Warning
+                }
             }
             else {
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 2002 -Message "UDP-listener: packet sent/port scanned ($($endpoint.Address.IPAddressToString))" -EntryType Warning
+                # Recieve data is NaN. Do not process at all.
+                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 311 -Message "Listener: Client '$ip' sendt a packet with NaN-content" -EntryType Warning
             }
         }
     }
 
-    # For every 10th loop, stop the WinRM-service if its running
-    # This is in case the WinRM service is started manually by user. For the service to keep track on this, without spending to much CPU, we check every ~40 seconds
-    if ([int]$i -ge 10) {
-        if (!((Get-Service WinRM).Status -eq 'Stopped')) {
-            try {
-                Stop-Service WinRM -Force -ErrorAction Stop
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 402 -Message "WinRM-service: Stopped" -EntryType Information
-            }
-            catch {
-                Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 404 -Message "WinRM-service: Failed to stop: $($_.Exception.Message)" -EntryType Error
-            }
-        }        
-        if ($Debug) {
-            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 50 -Message "WinRM-service: Alive ($i)" -EntryType Information
+    # For every 20th loop, stop the WinRM-service if its running AND we have no active clients + trigger garbage collection
+    if ([int]$i -ge 20) {
+
+        # Re-sync first to prune expired
+        $WinRMOpen = Sync-WinRMAccess -Clients $Clients -FirewallRule $FirewallRule -Debug $Debug
+
+        # Stop service if no connections. In case it was manually started
+        if (-not $WinRMOpen) {
+            Stop-WinRM -Context 'sanity check if manually started'
         }
+
+        if ($Debug) {
+            Write-EventLog -LogName 'WinRM-Cloak' -Source "WinRM-Cloak" -EventID 800 -Message "Maint: Alive. loop number $i reached; ActiveClients=$($Clients.Count)" -EntryType Information
+        }
+
+        # Garbabge collection to keep memory usage low
+        [System.GC]::Collect()
+
+        # Reset the loop counter
         [int]$i = 0
     }
-    [int]$i ++
+
+    [int]$i++
 }
